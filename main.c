@@ -18,8 +18,8 @@
 typedef struct Header {
     char* key;
     char* value;
-    struct Header* next;
-} Header;
+    struct HttpHeader* next;
+} HttpHeader;
 enum HttpMethods{
 	GET,
 	POST,
@@ -29,10 +29,10 @@ enum HttpMethods{
 };
 
 typedef struct Request {
-    enum HttpMethods* method;
+    enum HttpMethods method;
     char* path;
     char* version;
-    Header* headers;  // Changed to linked list of headers
+    HttpHeader* headers;  // Changed to linked list of headers
     char* body;
 } Request;
 typedef struct {
@@ -46,7 +46,7 @@ typedef struct {
 
 
 char* http_read_buffer(int fd);
-Request* http_parse_request(char* buffer, size_t buffer_size);
+Request* http_parse_request(char* buffer);
 Response* http_response_init();
 void http_route_request();
 char* http_render_response(Response* response);
@@ -58,7 +58,6 @@ void free_request(Request*);
 int socket_fd;
 struct sockaddr_in addr;
 
-
 enum HttpMethods parse_method(char* method) {
     if (strcmp(method, "GET") == 0) return GET;
     if (strcmp(method, "POST") == 0) return POST;
@@ -66,88 +65,22 @@ enum HttpMethods parse_method(char* method) {
     if (strcmp(method, "DELETE") == 0) return DELETE;
     return UNKNOWN;
 }
-Request* http_parse_request(char* buffer, size_t buffer_size) {
-    if (!buffer || buffer_size == 0) return NULL;
-    
-    Request* request = (Request*)calloc(1, sizeof(Request));
-    if (!request) return NULL;
+Request* http_parse_request(char* buffer) {
+	// Allocate request
+	Request* req = (Request*)malloc(sizeof(Request));
+ 	if (!req) return NULL;
+	// Parse first line
 
-    // Ensure buffer is null-terminated for string operations
-    char* working_buffer = strndup(buffer, buffer_size);
-    if (!working_buffer) {
-        free(request);
-        return NULL;
-    }
+	char* method_str = strtok(buffer, " ");  // First part: Method
+    char* path = strtok(NULL, " ");          // Second part: Path
+    char* version = strtok(NULL, "\r\n");    // Third part: HTTP version
 
-    // Parse request line
-    char* line = strtok(working_buffer, "\r\n");
-    if (!line) goto cleanup;
 
-    char* method_str = strtok(line, " ");
-    char* path = strtok(NULL, " ");
-    char* version = strtok(NULL, " ");
-    if (!method_str || !path || !version) goto cleanup;
+	req->method = parse_method(method_str);
+    req->path = strdup(path);
+    req->version = strdup(version);
 
-    // Allocate and set method
-    request->method = malloc(sizeof(enum HttpMethods));
-    if (!request->method) goto cleanup;
-    *(request->method) = parse_method(method_str);
-
-    // Copy path and version
-    request->path = strdup(path);
-    request->version = strdup(version);
-    if (!request->path || !request->version) goto cleanup;
-
-    // Parse headers
-    Header* last_header = NULL;
-    while ((line = strtok(NULL, "\r\n"))) {
-        if (strlen(line) == 0) break;  // Empty line indicates end of headers
-        
-        char* key = strtok(line, ":");
-        char* value = strtok(NULL, "");
-        if (!key || !value) continue;
-
-        // Trim leading whitespace from value
-        while (*value == ' ') value++;
-
-        Header* header = malloc(sizeof(Header));
-        if (!header) goto cleanup;
-
-        header->key = strdup(key);
-        header->value = strdup(value);
-        header->next = NULL;
-
-        if (!header->key || !header->value) {
-            free(header);
-            goto cleanup;
-        }
-
-        if (last_header) {
-            last_header->next = header;
-        } else {
-            request->headers = header;
-        }
-        last_header = header;
-    }
-
-    // Parse body (everything after headers)
-    char* body_start = strstr(buffer, "\r\n\r\n");
-    if (body_start) {
-        body_start += 4;
-        request->body = strdup(body_start);
-        if (!request->body) goto cleanup;
-    } else {
-        request->body = strdup("");
-        if (!request->body) goto cleanup;
-    }
-
-    free(working_buffer);
-    return request;
-
-cleanup:
-    free(working_buffer);
-	free_request(request);
-    return NULL;
+    return req;
 }
 
 void print_request(const Request* request) {
@@ -157,7 +90,7 @@ void print_request(const Request* request) {
     }
 
     const char* method;
-    switch (*(request->method)) {
+    switch ((request->method)) {
         case GET: method = "GET"; break;
         case POST: method = "POST"; break;
         case PUT: method = "PUT"; break;
@@ -176,7 +109,6 @@ void free_request(Request* request) {
     if (!request) return;
 
     // Free the allocated memory for each member
-    free(request->method);
     free(request->path);
     free(request->version);
     free(request->headers);
@@ -280,7 +212,7 @@ void http_init(){
 
 		printf("Buffer: %s\n", buffer);
 
-		Request* request = http_parse_request(buffer, sizeof(buffer));
+		Request* request = http_parse_request(buffer); 
 		print_request(request);
 
 		
