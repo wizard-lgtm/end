@@ -27,6 +27,35 @@ enum HttpMethods{
 	PUT,
 	UNKNOWN
 };
+enum HttpMimeTypes {
+    MIME_TEXT_HTML,
+    MIME_TEXT_PLAIN,
+    MIME_TEXT_CSS,
+    MIME_APPLICATION_JSON,
+    MIME_APPLICATION_JAVASCRIPT,
+    MIME_IMAGE_PNG,
+    MIME_IMAGE_JPEG,
+    MIME_IMAGE_GIF,
+    MIME_VIDEO_MP4,
+    MIME_APPLICATION_OCTET_STREAM,
+    MIME_UNKNOWN
+};
+
+const char* mime_type_to_string(enum HttpMimeTypes mimeType) {
+    switch (mimeType) {
+        case MIME_TEXT_HTML: return "text/html";
+        case MIME_TEXT_PLAIN: return "text/plain";
+        case MIME_TEXT_CSS: return "text/css";
+        case MIME_APPLICATION_JSON: return "application/json";
+        case MIME_APPLICATION_JAVASCRIPT: return "application/javascript";
+        case MIME_IMAGE_PNG: return "image/png";
+        case MIME_IMAGE_JPEG: return "image/jpeg";
+        case MIME_IMAGE_GIF: return "image/gif";
+        case MIME_VIDEO_MP4: return "video/mp4";
+        case MIME_APPLICATION_OCTET_STREAM: return "application/octet-stream";
+        default: return "unknown";
+    }
+}
 
 typedef struct Request {
     enum HttpMethods method;
@@ -37,26 +66,172 @@ typedef struct Request {
 } Request;
 typedef struct {
 	char* version;
-	int status_code;
+	char* status_code;
 	char* status_message;
-	char* headers;
+	Header* headers;
 	char* body;
 } Response;
 
 
 
-char* http_read_buffer(int fd);
-Request* http_parse_request(char* buffer);
-Response* http_response_init();
-void http_route_request();
+char* http_read_buffer(int fd); // Done
+Request* http_parse_request(char* buffer); // Done.
+void http_route_request(Request* req, int client_fd);
 char* http_render_response(Response* response);
 void http_write_buffer(char* buffer);
-
+void print_response(Response*);
+void free_response(Response*);
 void free_request(Request*);
 
 
 int socket_fd;
 struct sockaddr_in addr;
+
+
+void http_route_request(Request* req, int client_fd) {
+    char* path = req->path;
+
+    if (strcmp(path, "/") == 0) {
+        Response* res = (Response*)malloc(sizeof(Response));
+        if (res == NULL) {
+            perror("Failed to allocate memory for response");
+            exit(EXIT_FAILURE);
+        }
+
+        res->version = strdup("HTTP/1.1");
+        res->status_code = strdup("200");
+        res->status_message = strdup("OK");
+
+        char* body = "kick my ass";
+        res->body = strdup(body);
+        if (res->body == NULL) {
+            perror("Failed to allocate memory for response body");
+            exit(EXIT_FAILURE);
+        }
+
+        res->headers = NULL; // No headers in this simple example
+
+        char* rendered_response = http_render_response(res);
+        printf("repsonse str is:\n %s\n", rendered_response);
+
+        // Send repsonse_str to client
+
+        // Free the response
+        free_response(res);
+        free(rendered_response);
+
+        // End the socket
+        close(client_fd);
+
+    } else {
+        printf("404\n");
+    }
+}
+
+
+char* http_render_response(Response* response){
+    int buffer_len = 1; // space for \0 
+    
+
+    // Append version
+    // Recalculate the size of buffer
+    buffer_len += strlen(response->version);
+    buffer_len += strlen(response->status_code);
+    buffer_len += strlen(response->status_message);
+    buffer_len += 2; // \r\n 
+    buffer_len += 2; // for spaces
+
+
+    // Add headers
+    Header* current_header = response->headers;
+
+    while(current_header != NULL){
+        buffer_len += strlen(current_header->key);
+        buffer_len += strlen(current_header->value);
+        buffer_len += 2; // space blank and : chr size
+        buffer_len += 2; // \r\n characters 
+
+        current_header = current_header->next;
+        
+    }
+
+    // Add body
+    buffer_len += 4; // \r\n\r\n
+    buffer_len += strlen(response->body);
+    buffer_len += 2; // \r\n
+
+    char* buffer = (char*)malloc(sizeof(char)* buffer_len);
+        if (buffer == NULL) {
+        perror("Failed to allocate memory");
+        exit(EXIT_FAILURE);
+    }
+
+    buffer[0] = '\0'; // Initialize the buffer
+
+    // put everything together
+
+    // Status line
+    strcat(buffer, response->version); 
+    strcat(buffer, " "); 
+    strcat(buffer, response->status_code); 
+    strcat(buffer, " "); 
+    strcat(buffer, response->status_message); 
+
+    // Headers
+
+    current_header = response->headers;
+
+    while(current_header != NULL){
+        strcat(buffer, current_header->key);
+        strcat(buffer, ": ");
+        strcat(buffer, current_header->value);
+        strcat(buffer, "\r\n");
+
+        current_header = current_header->next;
+    }
+
+    // Add body
+
+    strcat(buffer, "\r\n\r\n");
+    strcat(buffer, response->body);
+    strcat(buffer, "\r\n");
+
+
+    return buffer;
+}
+void free_response(Response* response) {
+    free(response->version);
+    free(response->status_code);
+    free(response->status_message);
+    Header* current_header = response->headers;
+    while (current_header != NULL) {
+        Header* temp = current_header;
+        current_header = current_header->next;
+        free(temp->key);
+        free(temp->value);
+        free(temp);
+    }
+    free(response->body);
+    free(response);
+}
+
+void print_response(Response* response) {
+    // Print status line
+    printf("%s %s %s\r\n", response->version, response->status_code, response->status_message);
+
+    // Print headers
+    Header* current_header = response->headers;
+    while (current_header != NULL) {
+        printf("%s: %s\r\n", current_header->key, current_header->value);
+        current_header = current_header->next;
+    }
+
+    // Print a blank line to separate headers from the body
+    printf("\r\n");
+
+    // Print body
+    printf("%s\r\n", response->body);
+}
 
 enum HttpMethods parse_method(char* method) {
     if (strcmp(method, "GET") == 0) return GET;
@@ -288,6 +463,9 @@ void http_init(){
 		
 		// Increment counter in every request
 		file_increment_counter();
+
+        // Route 
+        http_route_request(request, client_fd);
 
 		// Free
 		free(request);
