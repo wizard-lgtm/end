@@ -14,12 +14,12 @@
 #define PORT 8000
 #define INITIAL_BUFFER_SIZE 1024
 #define COUNTER_PATH "counter.txt"
- 
+
 typedef struct Header {
     char* key;
     char* value;
-    struct HttpHeader* next;
-} HttpHeader;
+    struct Header* next;
+} Header;
 enum HttpMethods{
 	GET,
 	POST,
@@ -32,7 +32,7 @@ typedef struct Request {
     enum HttpMethods method;
     char* path;
     char* version;
-    HttpHeader* headers;  // Changed to linked list of headers
+    Header* headers;  // Changed to linked list of headers
     char* body;
 } Request;
 typedef struct {
@@ -66,31 +66,87 @@ enum HttpMethods parse_method(char* method) {
     return UNKNOWN;
 }
 Request* http_parse_request(char* buffer) {
-	// Allocate request
-	Request* req = (Request*)malloc(sizeof(Request));
- 	if (!req) return NULL;
-	// Parse first line
+	
+    // Allocate request
+    Request* req = (Request*)malloc(sizeof(Request));
+    if (!req) return NULL;
+    
+    // Find the position of "\r\n\r\n"
+    char* separator = strstr(buffer, "\r\n\r\n");
 
-	char* method_str = strtok(buffer, " ");  // First part: Method
-    char* path = strtok(NULL, " ");          // Second part: Path
-    char* version = strtok(NULL, "\r\n");    // Third part: HTTP version
+    if (separator != NULL) {
+        // Null-terminate the header part
+        *separator = '\0';  
+        char* head = buffer; // The header starts at the beginning
+        char* body = separator + 4; // The body starts after the \r\n\r\n delimiter
 
+        // Now, split header into status line and headers
+        // Find the first "\r\n" to separate status line from headers
+        char* header_end = strstr(head, "\r\n");
+        if (header_end != NULL) {
+            *header_end = '\0';  // Null-terminate the status line
+            char* status_line = head;  // The status line is at the beginning
+            char* headers_str = header_end + 2;  // The headers start after the first \r\n
 
-	req->method = parse_method(method_str);
-    req->path = strdup(path);
-    req->version = strdup(version);
+            // Parse the status line
+            char* method_end = strtok(status_line, " ");
+            req->method = parse_method(method_end); // Parse method
+            req->path = strdup(strtok(NULL, " "));  // Get path
+            req->version = strdup(strtok(NULL, " ")); // Get version
 
+            // Initialize headers
+            req->headers = NULL;
+            Header* current_header = NULL;
+
+            // Parse header lines
+            char* header_line = strtok(headers_str, "\r\n");
+
+            while (header_line) {
+                // Split each header into key and value
+                char* colon_pos = strchr(header_line, ':');
+                if (colon_pos) {
+                    *colon_pos = '\0'; // Null-terminate the key
+                    char* key = header_line;
+                    char* value = colon_pos + 2; // Skip over ": "
+
+                    // Create a new header
+                    Header* new_header = (Header*)malloc(sizeof(Header));
+                    new_header->key = strdup(key);
+                    new_header->value = strdup(value);
+                    new_header->next = NULL;
+
+                    // Link it to the list
+                    if (!req->headers) {
+                        req->headers = new_header;
+                    } else {
+                        current_header->next = new_header;
+                    }
+                    current_header = new_header;
+                }
+                header_line = strtok(NULL, "\r\n");
+            }
+
+            // Copy body
+            req->body = strdup(body);
+
+        } else {
+            printf("Error: Could not find status line delimiter.\n");
+        }
+    } else {
+        printf("Error: Could not find header-body separator.\n");
+    }
+    
     return req;
 }
 
-void print_request(const Request* request) {
+void print_request(Request* request) {
     if (!request) {
         printf("Invalid request.\n");
         return;
     }
 
     const char* method;
-    switch ((request->method)) {
+    switch (request->method) {
         case GET: method = "GET"; break;
         case POST: method = "POST"; break;
         case PUT: method = "PUT"; break;
@@ -101,8 +157,15 @@ void print_request(const Request* request) {
     printf("Method: %s\n", method);
     printf("Path: %s\n", request->path);
     printf("Version: %s\n", request->version);
-    printf("Headers: %s\n", request->headers);
+    
     printf("Body: %s\n", request->body);
+
+    // Print headers
+    Header* current = request->headers;
+    while (current) {
+        printf("Header: %s: %s\n", current->key, current->value);
+        current = current->next;
+    }
 }
 
 void free_request(Request* request) {
@@ -111,10 +174,17 @@ void free_request(Request* request) {
     // Free the allocated memory for each member
     free(request->path);
     free(request->version);
-    free(request->headers);
-    free(request->body);
+    
+    Header* current_header = request->headers;
+    while (current_header) {
+        Header* temp = current_header;
+        current_header = current_header->next;
+        free(temp->key);
+        free(temp->value);
+        free(temp);
+    }
 
-    // Free the Request structure itself
+    free(request->body);
     free(request);
 }
 
