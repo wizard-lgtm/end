@@ -10,8 +10,7 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 
-
-#define PORT 8000
+#define PORT 8001
 #define INITIAL_BUFFER_SIZE 1024
 #define COUNTER_PATH "counter.txt"
 
@@ -68,6 +67,7 @@ typedef struct {
 	char* version;
 	char* status_code;
 	char* status_message;
+    enum HttpMimeTypes content_type;
 	Header* headers;
 	char* body;
 } Response;
@@ -112,10 +112,15 @@ void http_route_request(Request* req, int client_fd) {
         res->headers = NULL; // No headers in this simple example
 
         char* rendered_response = http_render_response(res);
-        printf("repsonse str is:\n %s\n", rendered_response);
+        printf("repsonse str is:\n%s\n", rendered_response);
 
         // Send repsonse_str to client
-
+        int bytes_written = write(client_fd, rendered_response, strlen(rendered_response));
+        if(bytes_written < 0) {
+            perror("Some error happened while writing repsonse to client\n");
+        }else{
+            printf("Response written!\n");
+        }
         // Free the response
         free_response(res);
         free(rendered_response);
@@ -131,6 +136,9 @@ void http_route_request(Request* req, int client_fd) {
 
 char* http_render_response(Response* response){
     int buffer_len = 1; // space for \0 
+    
+
+
     
 
     // Append version
@@ -159,6 +167,17 @@ char* http_render_response(Response* response){
     buffer_len += 4; // \r\n\r\n
     buffer_len += strlen(response->body);
     buffer_len += 2; // \r\n
+    
+
+    // Calculate Content-Length (length of the body only)
+    char content_length_value_str[20];
+    sprintf(content_length_value_str, "%zu", strlen(response->body));
+
+    // Add Content-Type and Content-Length headers
+    buffer_len += strlen("Content-Type: ") + strlen(mime_type_to_string(response->content_type)) + 2; // "\r\n"
+    buffer_len += strlen("Content-Length: ") + strlen(content_length_value_str) + 2; // "\r\n"
+
+    // Allocate buffer
 
     char* buffer = (char*)malloc(sizeof(char)* buffer_len);
         if (buffer == NULL) {
@@ -167,6 +186,7 @@ char* http_render_response(Response* response){
     }
 
     buffer[0] = '\0'; // Initialize the buffer
+    
 
     // put everything together
 
@@ -190,12 +210,24 @@ char* http_render_response(Response* response){
         current_header = current_header->next;
     }
 
+    strcat(buffer, "\r\n");
+
+    // Add Content-Type and Content-Length headers
+    strcat(buffer, "Content-Type: ");
+    strcat(buffer, mime_type_to_string(response->content_type));
+    strcat(buffer, "\r\n");
+    strcat(buffer, "Content-Length: ");
+    strcat(buffer, content_length_value_str);
+    strcat(buffer, "\r\n");
+
     // Add body
 
     strcat(buffer, "\r\n\r\n");
     strcat(buffer, response->body);
     strcat(buffer, "\r\n");
 
+
+    
 
     return buffer;
 }
@@ -419,6 +451,7 @@ void http_init(){
     }
 
 	// config address
+    memset(&addr, 0, sizeof(addr));  // Clear out the struct
 	addr.sin_port = htons(PORT);
 	addr.sin_family = AF_INET;
 	addr.sin_addr.s_addr = INADDR_ANY;
@@ -442,7 +475,7 @@ void http_init(){
 	while(1){
 		struct sockaddr_in client_addr;
 		int client_addr_len = sizeof(client_addr); 
-		int client_fd = accept(socket_fd, (struct sockaddr*)&addr, &client_addr_len);
+        int client_fd = accept(socket_fd, (struct sockaddr*)&client_addr, &client_addr_len);
 		if(client_fd < 0){
 			perror("Accept error");
 			continue;
@@ -456,6 +489,7 @@ void http_init(){
 		}
 
 		printf("Buffer: %s\n", buffer);
+
 
 		Request* request = http_parse_request(buffer); 
 		print_request(request);
