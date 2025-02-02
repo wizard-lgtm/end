@@ -11,7 +11,7 @@
 #include <sys/stat.h>
 
 #define PORT 8001
-#define INITIAL_BUFFER_SIZE 1024
+#define BUFFER_CHUNK_SIZE 1024
 #define COUNTER_PATH "counter.txt"
 
 typedef struct Header {
@@ -171,7 +171,7 @@ char* http_render_response(Response* response){
 
     // Calculate Content-Length (length of the body only)
     char content_length_value_str[20];
-    sprintf(content_length_value_str, "%zu", strlen(response->body));
+    sprintf(content_length_value_str, "%zu", strlen(response->body)+3);
 
     // Add Content-Type and Content-Length headers
     buffer_len += strlen("Content-Type: ") + strlen(mime_type_to_string(response->content_type)) + 2; // "\r\n"
@@ -508,48 +508,32 @@ void http_init(){
 	}
 
 }
-char* http_read_buffer(int fd) {
-    size_t buffer_size = INITIAL_BUFFER_SIZE;
-    char *buffer = malloc(buffer_size);
-    if (!buffer) {
-        perror("Malloc error");
-        return NULL;
-    }
+char* http_read_buffer(int fd){
+    int chunk_count = 1;
+    int total_size = 0;
+    int total_read = 0;
+    int bytes_read = 0;
+    char* buffer = NULL;
+    total_size = BUFFER_CHUNK_SIZE;
+    buffer = malloc(total_size);
+    while(1){
+        bytes_read = read(fd, buffer + total_read, BUFFER_CHUNK_SIZE);
+        if(bytes_read == 0){
+            break;
+        } 
+        total_read += bytes_read;
 
-    size_t total_bytes_read = 0;
-    ssize_t bytes_read;
-
-    while (1) {
-        // Read data into the buffer
-        bytes_read = read(fd, buffer + total_bytes_read, buffer_size - total_bytes_read);
-
-        // Check for errors or end of input
-        if (bytes_read < 0) {
-            perror("Read error");
-            free(buffer);
-            return NULL;
-        } else if (bytes_read == 0) {
-            break; // EOF
-        }
-
-        total_bytes_read += bytes_read;
-
-        // Check if we need to resize the buffer
-        if (total_bytes_read == buffer_size) {
-            buffer_size *= 2;
-            char *new_buffer = realloc(buffer, buffer_size);
-            if (!new_buffer) {
-                perror("Realloc error");
-                free(buffer);
-                return NULL;
-            }
+        if(total_read >= total_size){
+            chunk_count++;
+            total_size = BUFFER_CHUNK_SIZE * chunk_count;
+            char* new_buffer = realloc(buffer, total_size);
+            
             buffer = new_buffer;
+        }else{
+            break;
         }
     }
-
-    // Null-terminate the buffer
-    buffer[total_bytes_read] = '\0';
-
+    buffer[total_size] = 0;
     return buffer;
 }
 int main(){
