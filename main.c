@@ -9,6 +9,8 @@
 #include <errno.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <time.h>
+
 
 #define PORT 8001
 #define BUFFER_CHUNK_SIZE 1024
@@ -153,6 +155,7 @@ Response* http_route_request(Response* response, Request* request) {
         perror("Failed to allocate memory for response");
     }
     if (strcmp(path, "/") == 0) {
+
         http_route_home(request, response);
     } else {
         http_route_404(request, response);
@@ -161,22 +164,53 @@ Response* http_route_request(Response* response, Request* request) {
     return response;
 }
 
-void http_complete_connection(Response* response, int client_fd){
-    
-    char* rendered_response = http_render_response(response);
-    printf("repsonse str is:\n%s\n", rendered_response);
+void http_complete_connection(struct timespec start, Response* response, int client_fd) {
+    // Get current time with nanosecond precision
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
 
-    // Send repsonse_str to client
-    int bytes_written = write(client_fd, rendered_response, strlen(rendered_response));
-    if(bytes_written < 0) {
-        perror("Some error happened while writing repsonse to client\n");
-    }else{
-        printf("Response written!\n");
+    // Compute elapsed time in milliseconds with fractional precision
+    double render_time = (now.tv_sec - start.tv_sec) * 1000.0 + (now.tv_nsec - start.tv_nsec) / 1000000.0;
+
+    // Allocate buffer for render time string
+    char render_time_str[64];
+    snprintf(render_time_str, sizeof(render_time_str), "\nRendered in %.3f ms\n", render_time);
+
+    printf("%s\n", render_time_str);
+
+    // Modify response body before rendering
+    size_t new_body_length = strlen(response->body) + strlen(render_time_str) + 1;
+    char* new_body = malloc(new_body_length);
+    if (!new_body) {
+        perror("Memory allocation failed");
+        close(client_fd);
+        return;
     }
-    // Free the response
+
+    // Concatenate response body and render time message
+    strcpy(new_body, response->body);
+    strcat(new_body, render_time_str);
+
+    // Free the old body and update response->body
+    free(response->body);
+    response->body = new_body;
+
+    // Render the final response
+    char* rendered_response = http_render_response(response);
+    printf("Response str is:\n%s\n", rendered_response);
+
+    // Send response to client
+    int bytes_written = write(client_fd, rendered_response, strlen(rendered_response));
+    if (bytes_written < 0) {
+        perror("Error writing response to client");
+    } else {
+        printf("Response written successfully!\n");
+    }
+
+    // Free the rendered response
     free(rendered_response);
 
-    // End the socket
+    // Close the socket
     close(client_fd);
 }
 
@@ -316,6 +350,8 @@ enum HttpMethods parse_method(char* method) {
     return UNKNOWN;
 }
 Request* http_parse_request(char* buffer) {
+
+    printf("request buffer: %s\n", buffer);
 	
     // Allocate request
     Request* req = (Request*)malloc(sizeof(Request));
@@ -384,6 +420,7 @@ Request* http_parse_request(char* buffer) {
         }
     } else {
         printf("Error: Could not find header-body separator.\n");
+        return NULL;
     }
     
     return req;
@@ -519,10 +556,13 @@ void http_init(){
 		struct sockaddr_in client_addr;
 		int client_addr_len = sizeof(client_addr); 
         int client_fd = accept(socket_fd, (struct sockaddr*)&client_addr, &client_addr_len);
+        
 		if(client_fd < 0){
 			perror("Accept error");
 			continue;
 		}
+        struct timespec start;
+        clock_gettime(CLOCK_MONOTONIC, &start);
 
 		char* buffer = http_read_buffer(client_fd);
 
@@ -537,13 +577,19 @@ void http_init(){
 		file_increment_counter();
 
 		Request* request = http_parse_request(buffer); 
+        if(!request){
+            printf("probably malformed request idk\n");
+            close(client_fd);
+            continue;
+        }
         Response* response = (Response*)malloc(sizeof(Response));
 
         // Route 
         http_route_request(response, request);
 
-        // Complete
-        http_complete_connection(response, client_fd);
+
+
+        http_complete_connection(start, response, client_fd);
 
 		// Free
         free_response(response);
