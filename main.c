@@ -82,37 +82,68 @@ void http_write_buffer(char* buffer);
 void print_response(Response*);
 void free_response(Response*);
 void free_request(Request*);
-
+char* read_file_to_buffer(char* fpath);
 
 int socket_fd;
 struct sockaddr_in addr;
+
+char* file_read_to_buffer(char* fpath) {
+    FILE* file = fopen(fpath, "rb");
+    if (!file) {
+        perror("Failed to open file");
+        return NULL;
+    }
+
+    // Seek to the end to get file size
+    fseek(file, 0, SEEK_END);
+    size_t size = ftell(file);
+    rewind(file);  
+
+    // Allocate buffer
+    char* buffer = (char*)malloc(size + 1); // +1 for null terminator
+    if (!buffer) {
+        fclose(file);
+        perror("Memory allocation failed");
+        return NULL;
+    }
+
+    // Read file content
+    fread(buffer, 1, size, file);
+    buffer[size] = '\0';  // Null-terminate the buffer
+
+    fclose(file);
+
+    return buffer;
+}
 
 void http_route_home(Request* req, Response* res){
         res->version = strdup("HTTP/1.1");
         res->status_code = strdup("200");
         res->status_message = strdup("OK");
 
-        char* body = "<h1>Main page of my suffers</h1>";
+        char* body = file_read_to_buffer("./pages/index.html");
         res->body = strdup(body);
         if (res->body == NULL) {
             perror("Failed to allocate memory for response body");
             exit(EXIT_FAILURE);
         }
         res->headers = NULL; 
+        free(body);
 }
 
 void http_route_404(Request* req, Response* res){
         res->version = strdup("HTTP/1.1");
-        res->status_code = strdup("200");
-        res->status_message = strdup("OK");
+        res->status_code = strdup("404");
+        res->status_message = strdup("NOT FOUND");
 
-        char* body = "404";
-        res->body = strdup(body);
+        char* page = file_read_to_buffer("./pages/404.html");
+        res->body = strdup(page);
         if (res->body == NULL) {
             perror("Failed to allocate memory for response body");
             exit(EXIT_FAILURE);
         }
         res->headers = NULL; 
+        free(page);
 }
 
 Response* http_route_request(Response* response, Request* request) {
@@ -128,7 +159,6 @@ Response* http_route_request(Response* response, Request* request) {
     }
 
     return response;
-    
 }
 
 void http_complete_connection(Response* response, int client_fd){
