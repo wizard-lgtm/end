@@ -74,9 +74,9 @@ typedef struct {
 
 
 
-char* http_read_buffer(int fd); // Done
-Request* http_parse_request(char* buffer); // Done.
-void http_route_request(Request* req, int client_fd);
+char* http_read_buffer(int fd);
+Request* http_parse_request(char* buffer);
+Response* http_route_connection(Request* request, Response* response);
 char* http_render_response(Response* response);
 void http_write_buffer(char* buffer);
 void print_response(Response*);
@@ -87,60 +87,73 @@ void free_request(Request*);
 int socket_fd;
 struct sockaddr_in addr;
 
-
-void http_route_request(Request* req, int client_fd) {
-    char* path = req->path;
-
-    if (strcmp(path, "/") == 0) {
-        Response* res = (Response*)malloc(sizeof(Response));
-        if (res == NULL) {
-            perror("Failed to allocate memory for response");
-            exit(EXIT_FAILURE);
-        }
-
+void http_route_home(Request* req, Response* res){
         res->version = strdup("HTTP/1.1");
         res->status_code = strdup("200");
         res->status_message = strdup("OK");
 
-        char* body = "kick my ass";
+        char* body = "<h1>Main page of my suffers</h1>";
         res->body = strdup(body);
         if (res->body == NULL) {
             perror("Failed to allocate memory for response body");
             exit(EXIT_FAILURE);
         }
+        res->headers = NULL; 
+}
 
-        res->headers = NULL; // No headers in this simple example
+void http_route_404(Request* req, Response* res){
+        res->version = strdup("HTTP/1.1");
+        res->status_code = strdup("200");
+        res->status_message = strdup("OK");
 
-        char* rendered_response = http_render_response(res);
-        printf("repsonse str is:\n%s\n", rendered_response);
-
-        // Send repsonse_str to client
-        int bytes_written = write(client_fd, rendered_response, strlen(rendered_response));
-        if(bytes_written < 0) {
-            perror("Some error happened while writing repsonse to client\n");
-        }else{
-            printf("Response written!\n");
+        char* body = "404";
+        res->body = strdup(body);
+        if (res->body == NULL) {
+            perror("Failed to allocate memory for response body");
+            exit(EXIT_FAILURE);
         }
-        // Free the response
-        free_response(res);
-        free(rendered_response);
+        res->headers = NULL; 
+}
 
-        // End the socket
-        close(client_fd);
+Response* http_route_request(Response* response, Request* request) {
+    char* path = request->path;
 
-    } else {
-        printf("404\n");
+    if (response == NULL) {
+        perror("Failed to allocate memory for response");
     }
+    if (strcmp(path, "/") == 0) {
+        http_route_home(request, response);
+    } else {
+        http_route_404(request, response);
+    }
+
+    return response;
+    
+}
+
+void http_complete_connection(Response* response, int client_fd){
+    
+    char* rendered_response = http_render_response(response);
+    printf("repsonse str is:\n%s\n", rendered_response);
+
+    // Send repsonse_str to client
+    int bytes_written = write(client_fd, rendered_response, strlen(rendered_response));
+    if(bytes_written < 0) {
+        perror("Some error happened while writing repsonse to client\n");
+    }else{
+        printf("Response written!\n");
+    }
+    // Free the response
+    free(rendered_response);
+
+    // End the socket
+    close(client_fd);
 }
 
 
 char* http_render_response(Response* response){
     int buffer_len = 1; // space for \0 
     
-
-
-    
-
     // Append version
     // Recalculate the size of buffer
     buffer_len += strlen(response->version);
@@ -490,19 +503,21 @@ void http_init(){
 
 		printf("Buffer: %s\n", buffer);
 
-
-		Request* request = http_parse_request(buffer); 
-		print_request(request);
-
-		
 		// Increment counter in every request
 		file_increment_counter();
 
+		Request* request = http_parse_request(buffer); 
+        Response* response = (Response*)malloc(sizeof(Response));
+
         // Route 
-        http_route_request(request, client_fd);
+        http_route_request(response, request);
+
+        // Complete
+        http_complete_connection(response, client_fd);
 
 		// Free
-		free(request);
+        free_response(response);
+        free_request(request);
 		free(buffer);
 		
 	}
