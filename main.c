@@ -83,7 +83,6 @@ typedef struct {
     struct Post* next;
 } Post;
 
-
 typedef struct {
     char* key;
     char* value;
@@ -103,7 +102,15 @@ char* read_file_to_buffer(char* fpath);
 
 int socket_fd;
 struct sockaddr_in addr;
-
+// Free the linked list
+void free_posts(Post* head) {
+    while (head) {
+        Post* temp = head;
+        head = head->next;
+        free(temp->filename);
+        free(temp);
+    }
+}
 Post* read_dir_entries(char* path) {
     DIR* dir = opendir(path);
     if (!dir) {
@@ -116,7 +123,7 @@ Post* read_dir_entries(char* path) {
     Post* tail = NULL;
 
     while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_name[0] == '.')  // Skip hidden files and
+        if (entry->d_name[0] == '.')  // Skip hidden files
             continue;
 
         char fullpath[1024];
@@ -131,11 +138,20 @@ Post* read_dir_entries(char* path) {
         Post* new_post = malloc(sizeof(Post));
         if (!new_post) {
             perror("malloc failed");
+            free_posts(head); // Free everything before returning
             closedir(dir);
-            return head;
+            return NULL;
         }
 
         new_post->filename = strdup(entry->d_name);
+        if (!new_post->filename) {  // Check strdup failure
+            perror("strdup failed");
+            free(new_post);
+            free_posts(head);
+            closedir(dir);
+            return NULL;
+        }
+
         new_post->created = (int)file_stat.st_ctime;
         new_post->modified = (int)file_stat.st_mtime;
         new_post->private = 0; 
@@ -161,18 +177,6 @@ void print_posts(Post* head) {
     }
 }
 
-// Free the linked list
-void free_posts(Post* head) {
-    while (head) {
-        Post* temp = head;
-        head = head->next;
-        free(temp->filename);
-        free(temp);
-    }
-}
-
-
-// Convert the linked list to a full string
 char* posts_to_string(Post* head) {
     if (!head) return strdup("");  // Return empty string if list is empty
 
@@ -193,25 +197,27 @@ char* posts_to_string(Post* head) {
         return NULL;
     }
 
-    // Build the full string
+    // Build the full string safely
     char* current_pos = result;
+    size_t remaining_size = total_size;
+
     temp = head;
     while (temp) {
-        int written = snprintf(current_pos, total_size - (current_pos - result),
+        int written = snprintf(current_pos, remaining_size,
                  "File: %s | Created: %d | Modified: %d | Private: %d\n",
                  temp->filename, temp->created, temp->modified, temp->private);
-        if (written < 0) {
+        if (written < 0 || (size_t)written >= remaining_size) {
             free(result);
-            perror("snprintf failed");
+            perror("snprintf buffer overflow");
             return NULL;
         }
         current_pos += written;  // Move pointer forward
+        remaining_size -= written;  // Reduce available space
         temp = temp->next;
     }
 
     return result;
 }
-
 
 char* file_read_to_buffer(char* fpath) {
     FILE* file = fopen(fpath, "rb");
@@ -367,32 +373,6 @@ void http_route_500(Request* req, Response* res){
     res->headers = NULL;
 }
 
-void http_route_home(Request* req, Response* res){
-        res->version = strdup("HTTP/1.1");
-        res->status_code = strdup("200");
-        res->status_message = strdup("OK");
-
-        char* notes_path = "./notes";
-        Post* notes = read_dir_entries(notes_path);
-        char* notes_str = posts_to_string(notes); 
-
-        TemplateData* data = NULL;
-        template_add_variable(&data, "var1", "TST");
-
-        // TODO! have a after free bug on notes_str. Still fixing
-        char* body = template_render_template("./pages/index.html", data);
-
-        template_free_list(data);
-        res->body = strdup(body);
-        if (res->body == NULL) {
-            perror("Failed to allocate memory for response body");
-            http_route_500(req, res);
-        }
-        res->headers = NULL; 
-        free(body);
-        free_posts(notes);
-        free(notes_str);
-}
 
 void http_route_404(Request* req, Response* res){
         res->version = strdup("HTTP/1.1");
@@ -408,6 +388,49 @@ void http_route_404(Request* req, Response* res){
         res->headers = NULL; 
         free(page);
 }
+
+void http_route_home(Request* req, Response* res){
+    res->version = strdup("HTTP/1.1");
+    res->status_code = strdup("200");
+    res->status_message = strdup("OK");
+
+    char* notes_path = "./notes";
+    Post* notes = read_dir_entries(notes_path);
+    char* notes_str = posts_to_string(notes); 
+
+    TemplateData* data = NULL;
+    template_add_variable(&data, "var1", "TST");
+    template_add_variable(&data, "notes", notes_str);  // Use notes_str inside template
+
+    char* body = template_render_template("./pages/index.html", data);
+    if (!body) {
+        perror("template_render_template failed");
+        template_free_list(data);
+        free_posts(notes);
+        free(notes_str);
+        http_route_500(req, res);
+        return;
+    }
+
+    template_free_list(data);
+
+    res->body = strdup(body);
+    if (!res->body) {
+        perror("Failed to allocate memory for response body");
+        free(body);
+        free_posts(notes);
+        free(notes_str);
+        http_route_500(req, res);
+        return;
+    }
+
+    res->headers = NULL;
+
+    free(body);
+    free_posts(notes);
+    free(notes_str);
+}
+
 
 Response* http_route_request(Response* response, Request* request) {
     char* path = request->path;
