@@ -13,8 +13,6 @@
 #include <sys/stat.h>
 #include <dirent.h>
 
-
-
 #define PORT 8001
 #define BUFFER_CHUNK_SIZE 1024
 #define COUNTER_PATH "counter.txt"
@@ -84,6 +82,13 @@ typedef struct {
     int private;
     struct Post* next;
 } Post;
+
+
+typedef struct {
+    char* key;
+    char* value;
+    struct TemplateData* next;
+} TemplateData;
 
 
 char* http_read_buffer(int fd);
@@ -166,6 +171,7 @@ void free_posts(Post* head) {
     }
 }
 
+
 // Convert the linked list to a full string
 char* posts_to_string(Post* head) {
     if (!head) return strdup("");  // Return empty string if list is empty
@@ -188,12 +194,18 @@ char* posts_to_string(Post* head) {
     }
 
     // Build the full string
-    result[0] = '\0';  // Ensure the string starts empty
+    char* current_pos = result;
     temp = head;
     while (temp) {
-        snprintf(result + strlen(result), total_size - strlen(result),
-                 "File: %s | Created: %s | Modified: %s | Private: %d\n",
+        int written = snprintf(current_pos, total_size - (current_pos - result),
+                 "File: %s | Created: %d | Modified: %d | Private: %d\n",
                  temp->filename, temp->created, temp->modified, temp->private);
+        if (written < 0) {
+            free(result);
+            perror("snprintf failed");
+            return NULL;
+        }
+        current_pos += written;  // Move pointer forward
         temp = temp->next;
     }
 
@@ -230,7 +242,39 @@ char* file_read_to_buffer(char* fpath) {
     return buffer;
 }
 
-char* http_render_template(char* fpath) {
+
+// Function to look up a variable in the linked list
+char* template_lookup_variable(TemplateData* data, const char* key) {
+    while (data) {  // Traverse the linked list
+        if (strcmp(data->key, key) == 0) {
+            return data->value;
+        }
+        data = data->next;
+    }
+    return "UNKNOWN";  // Default if variable not found
+}
+
+// Function to add a variable to the linked list
+void template_add_variable(TemplateData** head, const char* key, const char* value) {
+    TemplateData* new_node = (TemplateData*)malloc(sizeof(TemplateData));
+    new_node->key = strdup(key);
+    new_node->value = strdup(value);
+    new_node->next = *head;
+    *head = new_node;
+}
+
+// Function to free the linked list
+void template_free_list(TemplateData* head) {
+    while (head) {
+        TemplateData* temp = head;
+        head = head->next;
+        free(temp->key);
+        free(temp->value);
+        free(temp);
+    }
+}
+
+char* template_render_template(char* fpath, TemplateData* data) {
     // Open file 
     char* buffer = file_read_to_buffer(fpath);
     if (!buffer) {
@@ -282,11 +326,12 @@ char* http_render_template(char* fpath) {
         }
 
         // Extract variable name
+        // TODO! Make it safe (overflow danger)
         char var_name[64] = {0};
         strncpy(var_name, start + 3, end - start - 3);
 
-        // Replace with predefined value (you can use a lookup function here)
-        char* value = "REPLACEMENT";
+        // Replace variable value 
+        char* value = template_lookup_variable(data, var_name);
         size_t value_len = strlen(value);
 
         // Resize if needed
@@ -331,7 +376,13 @@ void http_route_home(Request* req, Response* res){
         Post* notes = read_dir_entries(notes_path);
         char* notes_str = posts_to_string(notes); 
 
-        char* body = http_render_template("./pages/index.html");
+        TemplateData* data = NULL;
+        template_add_variable(&data, "var1", "TST");
+
+        // TODO! have a after free bug on notes_str. Still fixing
+        char* body = template_render_template("./pages/index.html", data);
+
+        template_free_list(data);
         res->body = strdup(body);
         if (res->body == NULL) {
             perror("Failed to allocate memory for response body");
