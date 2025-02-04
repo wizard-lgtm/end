@@ -10,6 +10,9 @@
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <dirent.h>
+
 
 
 #define PORT 8001
@@ -74,6 +77,13 @@ typedef struct {
 	char* body;
 } Response;
 
+typedef struct {
+    char* filename;
+    int created;
+    int modified;
+    int private;
+    struct Post* next;
+} Post;
 
 
 char* http_read_buffer(int fd);
@@ -88,6 +98,108 @@ char* read_file_to_buffer(char* fpath);
 
 int socket_fd;
 struct sockaddr_in addr;
+
+Post* read_dir_entries(char* path) {
+    DIR* dir = opendir(path);
+    if (!dir) {
+        perror("opendir failed");
+        return NULL;
+    }
+
+    struct dirent* entry;
+    Post* head = NULL;
+    Post* tail = NULL;
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.')  // Skip hidden files and
+            continue;
+
+        char fullpath[1024];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", path, entry->d_name);
+
+        struct stat file_stat;
+        if (stat(fullpath, &file_stat) == -1) {
+            perror("stat failed");
+            continue;
+        }
+
+        Post* new_post = malloc(sizeof(Post));
+        if (!new_post) {
+            perror("malloc failed");
+            closedir(dir);
+            return head;
+        }
+
+        new_post->filename = strdup(entry->d_name);
+        new_post->created = (int)file_stat.st_ctime;
+        new_post->modified = (int)file_stat.st_mtime;
+        new_post->private = 0; 
+        new_post->next = NULL;
+
+        if (!head)
+            head = new_post;
+        else
+            tail->next = new_post;
+        
+        tail = new_post;
+    }
+
+    closedir(dir);
+    return head;
+}
+
+void print_posts(Post* head) {
+    while (head) {
+        printf("File: %s | Created: %d | Modified: %d | Private: %d\n",
+               head->filename, head->created, head->modified, head->private);
+        head = head->next;
+    }
+}
+
+// Free the linked list
+void free_posts(Post* head) {
+    while (head) {
+        Post* temp = head;
+        head = head->next;
+        free(temp->filename);
+        free(temp);
+    }
+}
+
+// Convert the linked list to a full string
+char* posts_to_string(Post* head) {
+    if (!head) return strdup("");  // Return empty string if list is empty
+
+    size_t total_size = 1; // Start with 1 for null terminator
+    Post* temp = head;
+
+    // Calculate required size
+    while (temp) {
+        total_size += snprintf(NULL, 0, "File: %s | Created: %d | Modified: %d | Private: %d\n",
+                               temp->filename, temp->created, temp->modified, temp->private);
+        temp = temp->next;
+    }
+
+    // Allocate memory for the full string
+    char* result = malloc(total_size);
+    if (!result) {
+        perror("malloc failed");
+        return NULL;
+    }
+
+    // Build the full string
+    result[0] = '\0';  // Ensure the string starts empty
+    temp = head;
+    while (temp) {
+        snprintf(result + strlen(result), total_size - strlen(result),
+                 "File: %s | Created: %s | Modified: %s | Private: %d\n",
+                 temp->filename, temp->created, temp->modified, temp->private);
+        temp = temp->next;
+    }
+
+    return result;
+}
+
 
 char* file_read_to_buffer(char* fpath) {
     FILE* file = fopen(fpath, "rb");
@@ -118,19 +230,117 @@ char* file_read_to_buffer(char* fpath) {
     return buffer;
 }
 
+char* http_render_template(char* fpath) {
+    // Open file 
+    char* buffer = file_read_to_buffer(fpath);
+    if (!buffer) {
+        perror("Can't read template buffer");
+        return strdup("<h1>500 Internal Server Error</h1><p>Failed to load template file.</p>");
+    }
+
+    char* start;
+    char* end;
+    int size = strlen(buffer) + 1;  // Base size
+    char* rendered_html = malloc(size);
+    if (!rendered_html) {
+        perror("Memory allocation failed");
+        free(buffer);
+        return strdup("<h1>500 Internal Server Error</h1><p>Memory allocation failed.</p>");
+    }
+
+    int out_index = 0;
+    char* current = buffer;
+    int line = 1; // Track line number
+
+    while ((start = strstr(current, "*_("))) {  // Find start of template variable
+        // Count lines until this point
+        for (char* temp = current; temp < start; temp++) {
+            if (*temp == '\n') line++;
+        }
+
+        // Copy content before `*_(` 
+        size_t chunk_size = start - current;
+        memcpy(rendered_html + out_index, current, chunk_size);
+        out_index += chunk_size;
+
+        end = strchr(start, ')');  // Find closing bracket
+
+        if (!end) {
+            fprintf(stderr, "Syntax error in template at line %d: missing closing `)`\n", line);
+
+            // Generate an error message in HTML
+            char error_msg[256];
+            snprintf(error_msg, sizeof(error_msg), 
+                "<h1>500 Internal Server Error</h1>"
+                "<p>Syntax error in template at line %d: missing closing `)`</p>"
+                "<pre>%s</pre>",
+                line, start);
+
+            free(buffer);
+            free(rendered_html);
+            return strdup(error_msg);
+        }
+
+        // Extract variable name
+        char var_name[64] = {0};
+        strncpy(var_name, start + 3, end - start - 3);
+
+        // Replace with predefined value (you can use a lookup function here)
+        char* value = "REPLACEMENT";
+        size_t value_len = strlen(value);
+
+        // Resize if needed
+        if (out_index + value_len >= size) {
+            size += value_len + 64;  // Allocate extra space
+            rendered_html = realloc(rendered_html, size);
+            if (!rendered_html) {
+                perror("Memory reallocation failed");
+                free(buffer);
+                return strdup("<h1>500 Internal Server Error</h1><p>Memory reallocation failed.</p>");
+            }
+        }
+
+        // Copy replacement value
+        memcpy(rendered_html + out_index, value, value_len);
+        out_index += value_len;
+
+        current = end + 1; // Move past the variable
+    }
+
+    // Copy remaining part of the string
+    strcpy(rendered_html + out_index, current);
+
+    free(buffer);
+    return rendered_html;
+}
+
+void http_route_500(Request* req, Response* res){
+    res->version = strdup("HTTP/1.1");
+    res->status_code = strdup("500");
+    res->status_message = strdup("INTERNAL SERVER ERROR");
+    res->body = strdup("<h1> 500 - Internal Server Error </h1>");
+    res->headers = NULL;
+}
+
 void http_route_home(Request* req, Response* res){
         res->version = strdup("HTTP/1.1");
         res->status_code = strdup("200");
         res->status_message = strdup("OK");
 
-        char* body = file_read_to_buffer("./pages/index.html");
+        char* notes_path = "./notes";
+        Post* notes = read_dir_entries(notes_path);
+        char* notes_str = posts_to_string(notes); 
+
+        char* body = http_render_template("./pages/index.html");
         res->body = strdup(body);
         if (res->body == NULL) {
             perror("Failed to allocate memory for response body");
-            exit(EXIT_FAILURE);
+            http_route_500(req, res);
         }
         res->headers = NULL; 
         free(body);
+        free_posts(notes);
+        free(notes_str);
 }
 
 void http_route_404(Request* req, Response* res){
