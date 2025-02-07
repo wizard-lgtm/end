@@ -337,7 +337,14 @@ char* template_render_template(char* fpath, TemplateData* data) {
         strncpy(var_name, start + 3, end - start - 3);
 
         // Replace variable value 
+        printf("Looking up variable: %s\n", var_name);
         char* value = template_lookup_variable(data, var_name);
+        if (value) {
+            printf("Replacing with value: %s\n", value);
+        } else {
+            printf("Variable %s not found.\n", var_name);
+        }
+
         size_t value_len = strlen(value);
 
         // Resize if needed
@@ -359,7 +366,31 @@ char* template_render_template(char* fpath, TemplateData* data) {
     }
 
     // Copy remaining part of the string
-    strcpy(rendered_html + out_index, current);
+
+
+    // Ensure there's enough space in rendered_html for the remaining string
+    size_t remaining_space = size - out_index;
+    if (remaining_space > 0) {
+        // Copy remaining part of the string safely using snprintf
+        int written = snprintf(rendered_html + out_index, remaining_space, "%s", current);
+        
+        // If snprintf truncates the string, realloc the buffer
+        if (written >= remaining_space) {
+            // Increase size to accommodate the entire string
+            size += written + 1;  // Extra space for null terminator
+            rendered_html = realloc(rendered_html, size);
+            if (!rendered_html) {
+                perror("Memory reallocation failed");
+                free(buffer);
+                return strdup("<h1>500 Internal Server Error</h1><p>Memory reallocation failed.</p>");
+            }
+
+            // Copy the remaining part of the string after realloc
+            snprintf(rendered_html + out_index, size - out_index, "%s", current);
+        }
+    } else {
+        fprintf(stderr, "Not enough space in buffer to copy the remaining string.\n");
+    }
 
     free(buffer);
     return rendered_html;
@@ -458,9 +489,7 @@ void http_complete_connection(struct timespec start, Response* response, int cli
 
     // Allocate buffer for render time string
     char render_time_str[64];
-    snprintf(render_time_str, sizeof(render_time_str), "\nRendered in %.3f ms\n", render_time);
-
-    printf("%s\n", render_time_str);
+    snprintf(render_time_str, sizeof(render_time_str), "\nConnection completed in %.3f ms\n", render_time);
 
     // Modify response body before rendering
     size_t new_body_length = strlen(response->body) + strlen(render_time_str) + 1;
@@ -481,7 +510,6 @@ void http_complete_connection(struct timespec start, Response* response, int cli
 
     // Render the final response
     char* rendered_response = http_render_response(response);
-    printf("Response str is:\n%s\n", rendered_response);
 
     // Send response to client
     int bytes_written = write(client_fd, rendered_response, strlen(rendered_response));
@@ -635,8 +663,6 @@ enum HttpMethods parse_method(char* method) {
 }
 Request* http_parse_request(char* buffer) {
 
-    printf("request buffer: %s\n", buffer);
-	
     // Allocate request
     Request* req = (Request*)malloc(sizeof(Request));
     if (!req) return NULL;
@@ -908,7 +934,7 @@ char* http_read_buffer(int fd){
             break;
         }
     }
-    buffer[total_size] = 0;
+    buffer[total_read] = 0;
     return buffer;
 }
 int main(){
