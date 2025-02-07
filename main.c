@@ -404,6 +404,28 @@ void http_route_500(Request* req, Response* res){
     res->headers = NULL;
 }
 
+void http_route_source(Request* req, Response* res){
+
+        res->version = strdup("HTTP/1.1");
+        res->status_code = strdup("200");
+        res->status_message = strdup("OK");
+
+        res->content_type = MIME_TEXT_PLAIN;
+
+        char* page= file_read_to_buffer("./main.c");
+
+        // TemplateData* data = NULL;
+        // template_add_variable(&data, "code", src);
+        // char* page = template_render_template("./pages/source.html", data);
+        res->body = strdup(page);
+        if (res->body == NULL) {
+            perror("Failed to allocate memory for response body");
+        }
+        res->headers = NULL; 
+        free(page);
+        // free(src);
+}
+
 
 void http_route_404(Request* req, Response* res){
         res->version = strdup("HTTP/1.1");
@@ -414,7 +436,6 @@ void http_route_404(Request* req, Response* res){
         res->body = strdup(page);
         if (res->body == NULL) {
             perror("Failed to allocate memory for response body");
-            exit(EXIT_FAILURE);
         }
         res->headers = NULL; 
         free(page);
@@ -470,9 +491,12 @@ Response* http_route_request(Response* response, Request* request) {
         perror("Failed to allocate memory for response");
     }
     if (strcmp(path, "/") == 0) {
-
         http_route_home(request, response);
-    } else {
+    }
+    else if(strcmp(path, "/source") == 0){
+        http_route_source(request, response);
+    }
+    else {
         http_route_404(request, response);
     }
 
