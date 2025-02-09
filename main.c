@@ -55,8 +55,7 @@ char* file_parse_extension(char* fpath){
 
 
     // dot is now it's .{extension}.
-    // skip the '.' by increasing it's offset by 1 and return it.
-    char* ext = strdup(dot + 1);
+    char* ext = strdup(dot);
     return ext;
     
 }
@@ -82,6 +81,11 @@ enum HttpMimeTypes mime_from_string(char* fpath) {
     // Extract file extension
     char* ext = file_parse_extension(fpath);
 
+
+    // Ensure extension is valid before comparing
+    if (ext == NULL) {
+        return MIME_APPLICATION_OCTET_STREAM; // Default MIME type for no extension
+    }
     // Compare file extension
     if (strcmp(ext, ".html") == 0) return MIME_TEXT_HTML;
     if (strcmp(ext, ".txt") == 0) return MIME_TEXT_PLAIN;
@@ -612,25 +616,26 @@ void http_route_public(Request* req, Response* res) {
     res->status_message = strdup("OK");
     res->headers = NULL;
 
-    // Lookup files in ./public directory
-    Post* entries = read_dir_entries("./public");
 
     // Set mime type
     enum HttpMimeTypes mime_type = mime_from_string(fpath);
+    printf("mime type %s\n", mime_type_to_string(mime_type));
     res->content_type = mime_type;
 
-    // Read file content
-    char* file = file_read_to_buffer(fpath);
-    if (!file) {
-        free_posts(entries);
-        free(fpath);
-        http_route_404(req, res);
-        return;
-    }
+    // Create a file path for the full path (add ./{folder}{fpath}; 
+    char* full_path = malloc(strlen("./public") + strlen(fpath) + 1);
+    strcpy(full_path, "./public");
+    strcat(full_path, fpath);  
+    char* file = file_read_to_buffer(full_path);
+    int len = strlen(file);
+
+    printf("len of file %d\n", len);
 
     req->body = file;
-    free_posts(entries);
+
+    printf("body %s\n", file);
     free(fpath);
+
 }
 
 Response* http_route_request(Response* response, Request* request) {
@@ -676,32 +681,48 @@ void http_complete_connection(struct timespec start, Response* response, int cli
     char render_time_str[64];
     snprintf(render_time_str, sizeof(render_time_str), "\nConnection completed in %.3f ms\n", render_time);
 
-    // Modify response body before rendering
+    // Ensure response->body is not NULL
+    if (response->body == NULL) {
+        response->body = strdup("");  // If NULL, make it an empty string
+        if (response->body == NULL) {
+            perror("Memory allocation failed for response body");
+            close(client_fd);
+            return;
+        }
+    }
+
+    // Calculate new body length and ensure no overflow
     size_t new_body_length = strlen(response->body) + strlen(render_time_str) + 1;
     char* new_body = malloc(new_body_length);
     if (!new_body) {
         perror("Memory allocation failed");
+        free(response->body);  // Free any existing body before returning
         close(client_fd);
         return;
     }
 
-    // Concatenate response body and render time message
-    strcpy(new_body, response->body);
-    strcat(new_body, render_time_str);
+    // Safely concatenate response body and render time message
+    snprintf(new_body, new_body_length, "%s%s", response->body, render_time_str);
 
     // Free the old body and update response->body
     free(response->body);
     response->body = new_body;
 
-    // Render the final response
+    // Render the final response (ensure http_render_response handles it correctly)
     char* rendered_response = http_render_response(response);
+    if (!rendered_response) {
+        perror("Failed to render response");
+        free(new_body);
+        close(client_fd);
+        return;
+    }
 
     // Send response to client
     int bytes_written = write(client_fd, rendered_response, strlen(rendered_response));
     if (bytes_written < 0) {
         perror("Error writing response to client");
     } else {
-        printf("Response written successfully!\n");
+        printf("Response written successfully!, %d bytes written\n", bytes_written);
     }
 
     // Free the rendered response
