@@ -115,6 +115,7 @@ typedef struct {
     enum HttpMimeTypes content_type;
 	Header* headers;
 	char* body;
+    size_t body_length;
 } Response;
 
 typedef struct {
@@ -259,6 +260,43 @@ char* posts_to_string(Post* head) {
     }
 
     return result;
+}
+
+unsigned char* file_read_binary_to_buffer(const char* fpath, size_t* out_size) {
+    FILE* file = fopen(fpath, "rb");
+    if (!file) {
+        perror("Failed to open file");
+        return NULL;
+    }
+
+    // Seek to the end to get file size
+    fseek(file, 0, SEEK_END);
+    size_t size = ftell(file);
+    rewind(file);
+
+    // Allocate buffer
+    unsigned char* buffer = (unsigned char*)malloc(size);
+    if (!buffer) {
+        fclose(file);
+        perror("Memory allocation failed");
+        return NULL;
+    }
+
+    // Read file content
+    size_t bytesRead = fread(buffer, 1, size, file);
+    fclose(file);
+
+    if (bytesRead != size) {
+        free(buffer);
+        fprintf(stderr, "File read error: expected %zu bytes, got %zu bytes\n", size, bytesRead);
+        return NULL;
+    }
+
+    if (out_size) {
+        *out_size = size;
+    }
+
+    return buffer;
 }
 
 
@@ -591,53 +629,47 @@ void http_route_home(Request* req, Response* res){
 }
 
 void http_route_public(Request* req, Response* res) {
-    printf("path: %s\n", req->path);
-
-    // Allocate memory for the path, including null terminator
     char* fpath = malloc(strlen(req->path) + 1);
     if (fpath == NULL) {
         perror("Failed to allocate memory for fpath");
         return;
     }
     strcpy(fpath, req->path);
-
-    // Check if path starts with "/public"
+    
     if (strncmp(fpath, "/public", 7) != 0) {
         free(fpath);
         http_route_404(req, res);
         return;
     }
-
-    // Remove "/public" from the path to get the actual file path
-    memmove(fpath, fpath + 7, strlen(fpath) - 6); // Shift the string
-
+    
+    memmove(fpath, fpath + 7, strlen(fpath) - 6);
     res->version = strdup("HTTP/1.1");
     res->status_code = strdup("200");
     res->status_message = strdup("OK");
     res->headers = NULL;
-
-
-    // Set mime type
+    
     enum HttpMimeTypes mime_type = mime_from_string(fpath);
     printf("mime type %s\n", mime_type_to_string(mime_type));
     res->content_type = mime_type;
-
-    // Create a file path for the full path (add ./{folder}{fpath}; 
+    
     char* full_path = malloc(strlen("./public") + strlen(fpath) + 1);
     strcpy(full_path, "./public");
     strcat(full_path, fpath);  
-    char* file = file_read_to_buffer(full_path);
-    int len = strlen(file);
-
-    printf("len of file %d\n", len);
-
-    req->body = file;
-
-    printf("body %s\n", file);
+    
+    size_t size;
+    char* file = file_read_binary_to_buffer(full_path, &size);
+    if(file) {
+        res->body = malloc(size);
+        if(res->body) {
+            memcpy(res->body, file, size);
+            res->body_length = size;
+        }
+    }
+    
     free(fpath);
-
+    free(full_path); 
+    free(file);
 }
-
 Response* http_route_request(Response* response, Request* request) {
     char* path = request->path;
 
@@ -654,8 +686,7 @@ Response* http_route_request(Response* response, Request* request) {
         http_route_notes(request, response);
     }
 
-    else if (strncmp(path, "/public", 7) == 0) {
-        // Handle public path logic, maybe serve static files
+    else if ((strcmp(path, "/public") == 0) || (strncmp(path, "/public/", 8) == 0)) {
         http_route_public(request, response);
     }
 
@@ -673,157 +704,144 @@ void http_complete_connection(struct timespec start, Response* response, int cli
     // Get current time with nanosecond precision
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-
-    // Compute elapsed time in milliseconds with fractional precision
-    double render_time = (now.tv_sec - start.tv_sec) * 1000.0 + (now.tv_nsec - start.tv_nsec) / 1000000.0;
-
-    // Allocate buffer for render time string
-    char render_time_str[64];
-    snprintf(render_time_str, sizeof(render_time_str), "\nConnection completed in %.3f ms\n", render_time);
-
-    // Ensure response->body is not NULL
-    if (response->body == NULL) {
-        response->body = strdup("");  // If NULL, make it an empty string
-        if (response->body == NULL) {
-            perror("Memory allocation failed for response body");
-            close(client_fd);
-            return;
+    double render_time = (now.tv_sec - start.tv_sec) * 1000.0 + 
+                        (now.tv_nsec - start.tv_nsec) / 1000000.0;
+    
+    // Only append timing for text responses
+    if (response->content_type == MIME_TEXT_HTML || 
+        response->content_type == MIME_TEXT_PLAIN) {
+        
+        // Append the body length if it's not 
+        if(!response->body_length){
+            response->body_length = strlen(response->body);
+        }
+        // For text responses, we can append timing
+        char render_time_str[64];
+        snprintf(render_time_str, sizeof(render_time_str), 
+                "\nConnection completed in %.3f ms\n", render_time);
+        
+        // Calculate new size and reallocate
+        size_t timing_len = strlen(render_time_str);
+        size_t new_len = response->body_length + timing_len;
+        char* new_body = malloc(new_len);
+        
+        if (new_body) {
+            memcpy(new_body, response->body, response->body_length);
+            memcpy(new_body + response->body_length, render_time_str, timing_len);
+            free(response->body);
+            response->body = new_body;
+            response->body_length = new_len;
         }
     }
 
-    // Calculate new body length and ensure no overflow
-    size_t new_body_length = strlen(response->body) + strlen(render_time_str) + 1;
-    char* new_body = malloc(new_body_length);
-    if (!new_body) {
-        perror("Memory allocation failed");
-        free(response->body);  // Free any existing body before returning
-        close(client_fd);
-        return;
-    }
-
-    // Safely concatenate response body and render time message
-    snprintf(new_body, new_body_length, "%s%s", response->body, render_time_str);
-
-    // Free the old body and update response->body
-    free(response->body);
-    response->body = new_body;
-
-    // Render the final response (ensure http_render_response handles it correctly)
+    // Render the response
     char* rendered_response = http_render_response(response);
     if (!rendered_response) {
         perror("Failed to render response");
-        free(new_body);
         close(client_fd);
         return;
     }
 
-    // Send response to client
-    int bytes_written = write(client_fd, rendered_response, strlen(rendered_response));
+    // Calculate total response size (headers + body + extra)
+    size_t total_size = response->body_length;  // body size
+    total_size += strlen(response->version) + strlen(response->status_code) + 
+                 strlen(response->status_message) + 4;  // status line
+    
+    // Add headers size
+    Header* current_header = response->headers;
+    while (current_header != NULL) {
+        total_size += strlen(current_header->key) + strlen(current_header->value) + 4;
+        current_header = current_header->next;
+    }
+    
+    // Add Content-Type and Content-Length headers size
+    char content_length_str[32];
+    snprintf(content_length_str, sizeof(content_length_str), "%zu", response->body_length);
+    total_size += strlen("Content-Type: ") + 
+                 strlen(mime_type_to_string(response->content_type)) + 2;
+    total_size += strlen("Content-Length: ") + strlen(content_length_str) + 2;
+    
+    // Add extra newlines and null terminator
+    total_size += 6;  // \r\n\r\n + final \r\n + \0
+
+    // Write the complete response
+    ssize_t bytes_written = write(client_fd, rendered_response, total_size);
     if (bytes_written < 0) {
         perror("Error writing response to client");
     } else {
-        printf("Response written successfully!, %d bytes written\n", bytes_written);
+        printf("Response written successfully!, %zd bytes written\n", bytes_written);
     }
 
-    // Free the rendered response
     free(rendered_response);
-
-    // Close the socket
     close(client_fd);
 }
-
-
-char* http_render_response(Response* response){
+char* http_render_response(Response* response) {
     int buffer_len = 1; // space for \0 
-    
+
     // Append version
-    // Recalculate the size of buffer
     buffer_len += strlen(response->version);
     buffer_len += strlen(response->status_code);
     buffer_len += strlen(response->status_message);
-    buffer_len += 2; // \r\n 
-    buffer_len += 2; // for spaces
-
-
+    buffer_len += 4; // space + space + \r\n
+    
     // Add headers
     Header* current_header = response->headers;
-
-    while(current_header != NULL){
+    while(current_header != NULL) {
         buffer_len += strlen(current_header->key);
         buffer_len += strlen(current_header->value);
-        buffer_len += 2; // space blank and : chr size
-        buffer_len += 2; // \r\n characters 
-
+        buffer_len += 4; // ": " and \r\n
         current_header = current_header->next;
-        
     }
-
+    
     // Add body
     buffer_len += 4; // \r\n\r\n
-    buffer_len += strlen(response->body);
-    buffer_len += 2; // \r\n
+    buffer_len += response->body_length;  // Use stored length instead of strlen
+    buffer_len += 2; // final \r\n
     
-
-    // Calculate Content-Length (length of the body only)
-    char content_length_value_str[20];
-    sprintf(content_length_value_str, "%zu", strlen(response->body)+3);
-
+    // Convert content length to string
+    char content_length_value_str[32];
+    sprintf(content_length_value_str, "%zu", response->body_length);
+    
     // Add Content-Type and Content-Length headers
-    buffer_len += strlen("Content-Type: ") + strlen(mime_type_to_string(response->content_type)) + 2; // "\r\n"
-    buffer_len += strlen("Content-Length: ") + strlen(content_length_value_str) + 2; // "\r\n"
-
+    buffer_len += strlen("Content-Type: ") + strlen(mime_type_to_string(response->content_type)) + 2;
+    buffer_len += strlen("Content-Length: ") + strlen(content_length_value_str) + 2;
     // Allocate buffer
-
-    char* buffer = (char*)malloc(sizeof(char)* buffer_len);
-        if (buffer == NULL) {
+    char* buffer = malloc(buffer_len);
+    if (buffer == NULL) {
         perror("Failed to allocate memory");
         exit(EXIT_FAILURE);
     }
-
-    buffer[0] = '\0'; // Initialize the buffer
     
-
-    // put everything together
-
+    // Use pointer arithmetic for building the response
+    char* ptr = buffer;
+    
     // Status line
-    strcat(buffer, response->version); 
-    strcat(buffer, " "); 
-    strcat(buffer, response->status_code); 
-    strcat(buffer, " "); 
-    strcat(buffer, response->status_message); 
-
+    ptr += sprintf(ptr, "%s %s %s\r\n", response->version, response->status_code, response->status_message);
+    
     // Headers
-
     current_header = response->headers;
-
-    while(current_header != NULL){
-        strcat(buffer, current_header->key);
-        strcat(buffer, ": ");
-        strcat(buffer, current_header->value);
-        strcat(buffer, "\r\n");
-
+    while(current_header != NULL) {
+        ptr += sprintf(ptr, "%s: %s\r\n", current_header->key, current_header->value);
         current_header = current_header->next;
     }
-
-    strcat(buffer, "\r\n");
-
-    // Add Content-Type and Content-Length headers
-    strcat(buffer, "Content-Type: ");
-    strcat(buffer, mime_type_to_string(response->content_type));
-    strcat(buffer, "\r\n");
-    strcat(buffer, "Content-Length: ");
-    strcat(buffer, content_length_value_str);
-    strcat(buffer, "\r\n");
-
-    // Add body
-
-    strcat(buffer, "\r\n\r\n");
-    strcat(buffer, response->body);
-    strcat(buffer, "\r\n");
-
-
     
-
+    // Content-Type and Content-Length headers
+    ptr += sprintf(ptr, "Content-Type: %s\r\n", mime_type_to_string(response->content_type));
+    ptr += sprintf(ptr, "Content-Length: %s\r\n", content_length_value_str);
+    
+    // Blank line
+    memcpy(ptr, "\r\n", 2);
+    ptr += 2;
+    
+    // Body
+    memcpy(ptr, response->body, response->body_length);
+    ptr += response->body_length;
+    
+    // Final \r\n
+    memcpy(ptr, "\r\n", 2);
+    ptr += 2;
+    *ptr = '\0';
+    
     return buffer;
 }
 void free_response(Response* response) {
