@@ -43,6 +43,24 @@ enum HttpMimeTypes {
     MIME_UNKNOWN
 };
 
+char* file_parse_extension(char* fpath){
+
+    if(fpath == NULL) return NULL;
+
+    // find the last '.'
+    const char* dot = strrchr(fpath, '.');    
+
+    // search dot if it's not found return null
+    if (!dot || dot == fpath) return NULL; 
+
+
+    // dot is now it's .{extension}.
+    // skip the '.' by increasing it's offset by 1 and return it.
+    char* ext = strdup(dot + 1);
+    return ext;
+    
+}
+
 const char* mime_type_to_string(enum HttpMimeTypes mimeType) {
     switch (mimeType) {
         case MIME_TEXT_HTML: return "text/html";
@@ -57,6 +75,26 @@ const char* mime_type_to_string(enum HttpMimeTypes mimeType) {
         case MIME_APPLICATION_OCTET_STREAM: return "application/octet-stream";
         default: return "unknown";
     }
+}
+
+enum HttpMimeTypes mime_from_string(char* fpath) {
+
+    // Extract file extension
+    char* ext = file_parse_extension(fpath);
+
+    // Compare file extension
+    if (strcmp(ext, ".html") == 0) return MIME_TEXT_HTML;
+    if (strcmp(ext, ".txt") == 0) return MIME_TEXT_PLAIN;
+    if (strcmp(ext, ".css") == 0) return MIME_TEXT_CSS;
+    if (strcmp(ext, ".json") == 0) return MIME_APPLICATION_JSON;
+    if (strcmp(ext, ".js") == 0) return MIME_APPLICATION_JAVASCRIPT;
+    if (strcmp(ext, ".png") == 0) return MIME_IMAGE_PNG;
+    if (strcmp(ext, ".jpeg") == 0 || strcmp(ext, ".jpg") == 0) return MIME_IMAGE_JPEG;
+    if (strcmp(ext, ".gif") == 0) return MIME_IMAGE_GIF;
+    if (strcmp(ext, ".mp4") == 0) return MIME_VIDEO_MP4;
+
+    free(ext);
+    return MIME_APPLICATION_OCTET_STREAM;  // Default MIME type for unknown extensions
 }
 
 typedef struct Request {
@@ -219,6 +257,8 @@ char* posts_to_string(Post* head) {
     return result;
 }
 
+
+
 char* file_read_to_buffer(char* fpath) {
     FILE* file = fopen(fpath, "rb");
     if (!file) {
@@ -248,6 +288,26 @@ char* file_read_to_buffer(char* fpath) {
     return buffer;
 }
 
+char* template_escape_html(const char* str) {
+    size_t len = strlen(str);
+    size_t new_len = len * 6 + 1; // Worst case: all chars are '&' -> "&amp;" (5 extra per char)
+    char* escaped = malloc(new_len);
+    if (!escaped) return NULL;
+
+    char* out = escaped;
+    for (const char* in = str; *in; in++) {
+        switch (*in) {
+            case '&': out += sprintf(out, "&amp;"); break;
+            case '<': out += sprintf(out, "&lt;"); break;
+            case '>': out += sprintf(out, "&gt;"); break;
+            case '"': out += sprintf(out, "&quot;"); break;
+            case '\'': out += sprintf(out, "&#39;"); break;
+            default: *out++ = *in; break;
+        }
+    }
+    *out = '\0';
+    return escaped;
+}
 
 // Function to look up a variable in the linked list
 char* template_lookup_variable(TemplateData* data, const char* key) {
@@ -427,6 +487,49 @@ void http_route_source(Request* req, Response* res){
 }
 
 
+void http_route_notes(Request* req, Response* res){
+    const char* prefix = "./notes/";
+    const char* suffix = ".md";
+    
+    size_t path_len = strlen(req->path);
+    size_t prefix_len = strlen(prefix);
+    size_t suffix_len = strlen(suffix);
+    
+    size_t total_size = prefix_len + path_len + suffix_len + 1; // +1 for null terminator
+    
+    char* filename = (char*)malloc(total_size);
+    if (!filename) {
+        http_route_500(req, res);
+        return;
+    }
+    char* postname = req->path;
+    snprintf(filename, total_size, "./notes%s.md", postname);
+
+    printf("Postname: %s\n", postname);
+    printf("Note path: %s\n", filename);
+
+    char* content = file_read_to_buffer(filename);
+
+    TemplateData* data = NULL;
+    template_add_variable(&data, "content", content);
+    template_add_variable(&data, "filename", postname);
+
+    printf("Notes:%s\n", content);
+
+    // build res
+    char* rendered_html = template_render_template("./pages/note.html", data);
+
+    res->version = strdup("HTTP/1.1");
+    res->status_code = strdup("200");
+    res->status_message = strdup("OK");
+    res->body = strdup(rendered_html);
+    res->headers = NULL;
+
+    template_free_list(data);
+    free(content);
+    free(rendered_html);
+}
+
 void http_route_404(Request* req, Response* res){
         res->version = strdup("HTTP/1.1");
         res->status_code = strdup("404");
@@ -483,6 +586,52 @@ void http_route_home(Request* req, Response* res){
     free(notes_str);
 }
 
+void http_route_public(Request* req, Response* res) {
+    printf("path: %s\n", req->path);
+
+    // Allocate memory for the path, including null terminator
+    char* fpath = malloc(strlen(req->path) + 1);
+    if (fpath == NULL) {
+        perror("Failed to allocate memory for fpath");
+        return;
+    }
+    strcpy(fpath, req->path);
+
+    // Check if path starts with "/public"
+    if (strncmp(fpath, "/public", 7) != 0) {
+        free(fpath);
+        http_route_404(req, res);
+        return;
+    }
+
+    // Remove "/public" from the path to get the actual file path
+    memmove(fpath, fpath + 7, strlen(fpath) - 6); // Shift the string
+
+    res->version = strdup("HTTP/1.1");
+    res->status_code = strdup("200");
+    res->status_message = strdup("OK");
+    res->headers = NULL;
+
+    // Lookup files in ./public directory
+    Post* entries = read_dir_entries("./public");
+
+    // Set mime type
+    enum HttpMimeTypes mime_type = mime_from_string(fpath);
+    res->content_type = mime_type;
+
+    // Read file content
+    char* file = file_read_to_buffer(fpath);
+    if (!file) {
+        free_posts(entries);
+        free(fpath);
+        http_route_404(req, res);
+        return;
+    }
+
+    req->body = file;
+    free_posts(entries);
+    free(fpath);
+}
 
 Response* http_route_request(Response* response, Request* request) {
     char* path = request->path;
@@ -496,6 +645,18 @@ Response* http_route_request(Response* response, Request* request) {
     else if(strcmp(path, "/source") == 0){
         http_route_source(request, response);
     }
+    else if(strcmp(path, "/test") == 0){
+        http_route_notes(request, response);
+    }
+
+    else if (strncmp(path, "/public", 7) == 0) {
+        // Handle public path logic, maybe serve static files
+        http_route_public(request, response);
+    }
+
+    // Check if it's starts first "/public" (do not change original path)
+    // http_route_public
+    
     else {
         http_route_404(request, response);
     }
