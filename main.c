@@ -81,7 +81,6 @@ enum HttpMimeTypes mime_from_string(char* fpath) {
     // Extract file extension
     char* ext = file_parse_extension(fpath);
 
-
     // Ensure extension is valid before comparing
     if (ext == NULL) {
         return MIME_APPLICATION_OCTET_STREAM; // Default MIME type for no extension
@@ -337,7 +336,7 @@ char* template_escape_html(const char* str) {
     if (!escaped) return NULL;
 
     char* out = escaped;
-    for (const char* in = str; *in; in++) {
+    for (char* in = str; *in; in++) {
         switch (*in) {
             case '&': out += sprintf(out, "&amp;"); break;
             case '<': out += sprintf(out, "&lt;"); break;
@@ -348,12 +347,18 @@ char* template_escape_html(const char* str) {
         }
     }
     *out = '\0';
+    printf("Escaped html %s\n", escaped);
     return escaped;
 }
 
 // Function to look up a variable in the linked list
 char* template_lookup_variable(TemplateData* data, const char* key) {
-    while (data) {  // Traverse the linked list
+    if(!data){
+        printf("No template data found!\n");
+    }
+    while (data) {
+        printf("%s == %s?\n", data->key, key);
+            // Traverse the linked list
         if (strcmp(data->key, key) == 0) {
             return data->value;
         }
@@ -403,69 +408,89 @@ char* template_render_template(char* fpath, TemplateData* data) {
     int out_index = 0;
     char* current = buffer;
     int line = 1; // Track line number
+    // Find start of template variable
 
-    while ((start = strstr(current, "*_("))) {  // Find start of template variable
+    // Decide it's raw or html {raw values are _(), html values are *_()}
+    // Escape html if it's raw 
+    int escape_html;
+    while (1) {
+        char* raw_start = strstr(current, "_(");
+        char* html_start = strstr(current, "*_(");
+    
+        if (!raw_start && !html_start) break; // No more placeholders
+    
+        if (!raw_start || (html_start && html_start < raw_start)) {
+            start = html_start;
+            escape_html = 1;
+        } else {
+            start = raw_start;
+            escape_html = 0;
+        }
+    
         // Count lines until this point
         for (char* temp = current; temp < start; temp++) {
             if (*temp == '\n') line++;
         }
-
-        // Copy content before `*_(` 
+    
+        // Copy content before the placeholder
         size_t chunk_size = start - current;
         memcpy(rendered_html + out_index, current, chunk_size);
         out_index += chunk_size;
-
+    
         end = strchr(start, ')');  // Find closing bracket
-
         if (!end) {
             fprintf(stderr, "Syntax error in template at line %d: missing closing `)`\n", line);
-
-            // Generate an error message in HTML
-            char error_msg[256];
-            snprintf(error_msg, sizeof(error_msg), 
-                "<h1>500 Internal Server Error</h1>"
-                "<p>Syntax error in template at line %d: missing closing `)`</p>"
-                "<pre>%s</pre>",
-                line, start);
-
             free(buffer);
             free(rendered_html);
-            return strdup(error_msg);
+            return strdup("<h1>500 Internal Server Error</h1><p>Syntax error in template</p>");
         }
-
-        // Extract variable name
-        // TODO! Make it safe (overflow danger)
+    
+        // Extract variable name safely
         char var_name[64] = {0};
-        strncpy(var_name, start + 3, end - start - 3);
-
-        // Replace variable value 
-        printf("Looking up variable: %s\n", var_name);
-        char* value = template_lookup_variable(data, var_name);
-        if (value) {
-            printf("Replacing with value: %s\n", value);
-        } else {
-            printf("Variable %s not found.\n", var_name);
+        size_t var_length = end - start - (escape_html ? 3 : 2);
+    
+        if (var_length >= sizeof(var_name)) {
+            fprintf(stderr, "Template error at line %d: Variable name too long\n", line);
+            free(buffer);
+            free(rendered_html);
+            return strdup("<h1>500 Internal Server Error</h1><p>Variable name too long.</p>");
         }
-
+    
+        memcpy(var_name, start + (escape_html ? 3 : 2), var_length);
+        var_name[var_length] = '\0';  // Null-terminate properly
+    
+        // Lookup variable
+        printf("Looking up for variable name: %s\n", var_name);
+        char* raw_value = template_lookup_variable(data, var_name);
+        char* value = escape_html ? template_escape_html(raw_value) : strdup(raw_value);
+    
+        if (!value) {
+            free(buffer);
+            free(rendered_html);
+            return strdup("<h1>500 Internal Server Error</h1><p>Memory allocation failed.</p>");
+        }
+    
         size_t value_len = strlen(value);
-
+    
         // Resize if needed
         if (out_index + value_len >= size) {
-            size += value_len + 64;  // Allocate extra space
+            size += value_len + 64;
             rendered_html = realloc(rendered_html, size);
             if (!rendered_html) {
                 perror("Memory reallocation failed");
                 free(buffer);
+                free(value);
                 return strdup("<h1>500 Internal Server Error</h1><p>Memory reallocation failed.</p>");
             }
         }
-
-        // Copy replacement value
+    
+        // Copy the variable's value
         memcpy(rendered_html + out_index, value, value_len);
         out_index += value_len;
-
+    
+        free(value);  // Free allocated memory for escaped value
         current = end + 1; // Move past the variable
-    }
+    } 
 
     // Copy remaining part of the string
 
@@ -596,8 +621,7 @@ void http_route_home(Request* req, Response* res){
     char* notes_str = posts_to_string(notes); 
 
     TemplateData* data = NULL;
-    template_add_variable(&data, "var1", "TST");
-    template_add_variable(&data, "notes", notes_str);  // Use notes_str inside template
+    template_add_variable(&data, "notes", "<h1>SSDA</h1>");  // Use notes_str inside template
 
     char* body = template_render_template("./pages/index.html", data);
     if (!body) {
@@ -708,7 +732,8 @@ void http_complete_connection(struct timespec start, Response* response, int cli
                         (now.tv_nsec - start.tv_nsec) / 1000000.0;
     
     // Only append timing for text responses
-    if (response->content_type == MIME_TEXT_HTML || 
+    if (
+        response->content_type == MIME_TEXT_HTML || 
         response->content_type == MIME_TEXT_PLAIN) {
         
         // Append the body length if it's not 
@@ -718,7 +743,7 @@ void http_complete_connection(struct timespec start, Response* response, int cli
         // For text responses, we can append timing
         char render_time_str[64];
         snprintf(render_time_str, sizeof(render_time_str), 
-                "\nConnection completed in %.3f ms\n", render_time);
+                "\nConnection completed in %.3f ms\n %d bytes of body written\n", render_time, response->body_length);
         
         // Calculate new size and reallocate
         size_t timing_len = strlen(render_time_str);
@@ -1104,8 +1129,6 @@ void http_init(){
 			perror("Buffer reading error");
 			continue;
 		}
-
-		printf("Buffer: %s\n", buffer);
 
 		// Increment counter in every request
 		file_increment_counter();
