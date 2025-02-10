@@ -607,6 +607,9 @@ void http_route_404(Request* req, Response* res){
 
         char* page = file_read_to_buffer("./pages/404.html");
         res->body = strdup(page);
+        res->body_length = strlen(page);
+        res->content_type = MIME_TEXT_HTML;
+        printf("body length%d\n", res->body_length);
         if (res->body == NULL) {
             perror("Failed to allocate memory for response body");
         }
@@ -618,6 +621,7 @@ void http_route_home(Request* req, Response* res){
     res->version = strdup("HTTP/1.1");
     res->status_code = strdup("200");
     res->status_message = strdup("OK");
+    res->content_type = MIME_TEXT_HTML;
 
     char* notes_path = "./notes";
     Post* notes = read_dir_entries(notes_path);
@@ -639,6 +643,8 @@ void http_route_home(Request* req, Response* res){
     template_free_list(data);
 
     res->body = strdup(body);
+    res->body_length = strlen(body);
+
     if (!res->body) {
         perror("Failed to allocate memory for response body");
         free(body);
@@ -734,15 +740,29 @@ void http_complete_connection(struct timespec start, Response* response, int cli
     double render_time = (now.tv_sec - start.tv_sec) * 1000.0 + 
                         (now.tv_nsec - start.tv_nsec) / 1000000.0;
     
-    // Only append timing for text responses
-    if (
+    if(
         response->content_type == MIME_TEXT_HTML || 
-        response->content_type == MIME_TEXT_PLAIN) {
-        
+        response->content_type == MIME_TEXT_PLAIN || 
+        response->content_type == MIME_TEXT_CSS
+    ){
         // Append the body length if it's not 
         if(!response->body_length){
             response->body_length = strlen(response->body);
         }
+    }
+
+    // Set unknown mime if it's not set for security
+    if(response->content_type == UNKNOWN){
+        printf("Mime type is unknown! Setting to octet-stream\n");
+        response->content_type = MIME_APPLICATION_OCTET_STREAM;
+    }
+
+    // Only append timing for text responses
+    if (
+        response->content_type == MIME_TEXT_HTML || 
+        response->content_type == MIME_TEXT_PLAIN  
+        ) {
+        
         // For text responses, we can append timing
         char render_time_str[64];
         snprintf(render_time_str, sizeof(render_time_str), 
@@ -871,6 +891,21 @@ char* http_render_response(Response* response) {
     *ptr = '\0';
     
     return buffer;
+}
+Response* http_response_init() {
+    Response* res = (Response*)malloc(sizeof(Response));
+    if(!res){
+        perror("Can't allocate space for response!\n");
+        return NULL;
+    }
+    res->version = strdup("HTTP/1.1");
+    res->status_code = strdup("200");
+    res->status_message = strdup("OK");
+    res->content_type = UNKNOWN;
+    res->body = NULL;
+    res->body_length = 0;
+    res->headers = NULL;
+    return res;
 }
 void free_response(Response* response) {
     free(response->version);
@@ -1142,7 +1177,18 @@ void http_init(){
             close(client_fd);
             continue;
         }
-        Response* response = (Response*)malloc(sizeof(Response));
+        Response* response = http_response_init();
+        if(!response){
+            perror("Alloc error!\n");
+                const char *error_response =
+        "HTTP/1.1 500 Internal Server Error\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Length: 21\r\n"
+        "\r\n"
+        "500 Internal Server Error";
+
+        write(client_fd, error_response, strlen(error_response));
+        }
 
         // Route 
         http_route_request(response, request);
