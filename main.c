@@ -1,3 +1,5 @@
+
+#define _POSIX_C_SOURCE 200809L  // Enable POSIX features
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +14,7 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <time.h> 
 
 #define PORT 8001
 #define BUFFER_CHUNK_SIZE 1024
@@ -117,7 +120,7 @@ typedef struct {
     size_t body_length;
 } Response;
 
-typedef struct {
+typedef struct Post{
     char* filename;
     int created;
     int modified;
@@ -125,7 +128,7 @@ typedef struct {
     struct Post* next;
 } Post;
 
-typedef struct {
+typedef struct TemplateData {
     char* key;
     char* value;
     struct TemplateData* next;
@@ -336,7 +339,7 @@ char* template_escape_html(const char* str) {
     if (!escaped) return NULL;
 
     char* out = escaped;
-    for (char* in = str; *in; in++) {
+    for (const char* in = str; *in; in++) {
         switch (*in) {
             case '&': out += sprintf(out, "&amp;"); break;
             case '<': out += sprintf(out, "&lt;"); break;
@@ -377,7 +380,7 @@ void template_add_variable(TemplateData** head, const char* key, const char* val
 }
 
 // Function to free the linked list
-void template_free_list(TemplateData* head) {
+void template_free_list(struct TemplateData* head) {
     while (head) {
         TemplateData* temp = head;
         head = head->next;
@@ -743,19 +746,19 @@ void http_complete_connection(struct timespec start, Response* response, int cli
         // For text responses, we can append timing
         char render_time_str[64];
         snprintf(render_time_str, sizeof(render_time_str), 
-                "\nConnection completed in %.3f ms\n %d bytes of body written\n", render_time, response->body_length);
+                "\nConnection completed in %.3f ms\n %ld bytes of body written\n", render_time, response->body_length);
         
         // Calculate new size and reallocate
         size_t timing_len = strlen(render_time_str);
         size_t new_len = response->body_length + timing_len;
-        char* new_body = malloc(new_len);
-        
+        char* new_body = malloc(response->body_length + timing_len + 1);  // Add 1 for null terminator
         if (new_body) {
             memcpy(new_body, response->body, response->body_length);
             memcpy(new_body + response->body_length, render_time_str, timing_len);
+            new_body[response->body_length + timing_len] = '\0';  // Null-terminate
             free(response->body);
             response->body = new_body;
-            response->body_length = new_len;
+            response->body_length += timing_len;
         }
     }
 
