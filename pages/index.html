@@ -11,7 +11,10 @@
     <img src="./public/plane.gif" alt="Plane GIF">
     <p>i believe in the old internet</p>
     <h2>Posts</h2>
-    <p>*_(notes)</p>
+    {for note in notes}
+      <li>{note}</li>
+    {endfor}
+    _(notes)
     <p>
       Info: No JavaScript is used in this website. Fully rendered in C template.
       <a href="https://www.youtube.com/watch?v=J6yiNbiiCzA">Because JS sucks</a>
