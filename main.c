@@ -1,5 +1,6 @@
-
-#define _POSIX_C_SOURCE 200809L  // Enable POSIX features
+#ifdef __linux__
+    #define _POSIX_C_SOURCE 200809L  // Enable POSIX features only for Linux
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +16,8 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <time.h> 
+#include <sys/fcntl.h>
+#include <libgen.h>
 
 #define PORT 8001
 #define BUFFER_CHUNK_SIZE 1024
@@ -46,6 +49,7 @@ enum HttpMimeTypes {
     MIME_UNKNOWN
 };
 
+
 char* file_parse_extension(char* fpath){
 
     if(fpath == NULL) return NULL;
@@ -61,6 +65,48 @@ char* file_parse_extension(char* fpath){
     char* ext = strdup(dot);
     return ext;
     
+}
+void file_increment_counter() {
+    int fd = open(COUNTER_PATH, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+    if (fd < 0) {
+        perror("Open error");
+        return;
+    }
+
+    // Lock the file to prevent concurrent writes
+    if (flock(fd, LOCK_EX) < 0) {
+        perror("Lock error");
+        close(fd);
+        return;
+    }
+
+    // Read the current counter value
+    char buffer[64];
+    ssize_t bytes_read = read(fd, buffer, sizeof(buffer) - 1);
+    int counter = 0;
+
+    if (bytes_read > 0) {
+        buffer[bytes_read] = '\0';
+        counter = atoi(buffer);
+    } else if (bytes_read < 0) {
+        perror("Read error");
+    }
+
+    // Increment the counter
+    counter++;
+
+    // Write the updated counter back to the file
+    lseek(fd, 0, SEEK_SET);
+    ftruncate(fd, 0);  // Clear the file before writing
+    snprintf(buffer, sizeof(buffer), "%d\n", counter);
+
+    if (write(fd, buffer, strlen(buffer)) < 0) {
+        perror("Write error");
+    }
+
+    // Unlock the file and close it
+    flock(fd, LOCK_UN);
+    close(fd);
 }
 
 const char* mime_type_to_string(enum HttpMimeTypes mimeType) {
@@ -353,6 +399,132 @@ char* template_escape_html(const char* str) {
     printf("Escaped html %s\n", escaped);
     return escaped;
 }
+int mark_double_down_calculate_html_size(const char* fcontent) {
+    int size = strlen(fcontent); // Base size (assume same length initially)
+    
+    const char* src = fcontent;
+    while (*src) {
+        if (*src == '#' && (*(src + 1) == ' ' || *(src + 1) == '#')) {
+            int level = 0;
+            while (*src == '#') {
+                level++;
+                src++;
+            }
+            if (*src == ' ') {
+                size += 7 + (level > 1 ? 2 * (level - 1) : 0); // <h1> + </h1> (7 extra), deeper levels add 2 extra per #
+            }
+        } else if (*src == '*' && *(src + 1) == '*') {
+            size += 7; // **bold** → <b>bold</b> (adds 7 extra chars)
+        } else if (*src == '*' && *(src + 1) != '*') {
+            size += 7; // *italic* → <i>italic</i> (adds 7 extra chars)
+        } else if (*src == '>' && *(src + 1) == ' ') {
+            size += 17; // > text → <blockquote>text</blockquote> (adds 17 extra chars)
+        } else if (*src == '`') {
+            size += 11; // `code` → <code>code</code> (adds 11 extra chars)
+        } else if (*src == '-' && *(src + 1) == '-' && *(src + 2) == '-') {
+            size += 4; // --- → <hr> (adds 4 extra chars)
+        } else if (*src == '[') {
+            const char* temp = src;
+            while (*temp && *temp != ']') temp++;
+            if (*(temp + 1) == '(') { // Found a link [title](url)
+                size += 15; // [title](url) → <a href="url">title</a> (approx. 15 extra chars)
+            }
+        } else if (*src == '!' && *(src + 1) == '[') {
+            const char* temp = src;
+            while (*temp && *temp != ']') temp++;
+            if (*(temp + 1) == '(') { // Found an image ![alt](image.jpg)
+                size += 15; // ![alt](image.jpg) → <img src="image.jpg" alt="alt"> (approx. 15 extra chars)
+            }
+        }
+        src++;
+    }
+    
+    return size;
+}
+
+char* mark_double_down_parser(char* fpath){
+    // Read the file 
+    char* fcontent = file_read_to_buffer(fpath);
+    if(!fcontent){
+        perror("Reading file error in mark_double_down_parser");
+        return NULL;
+    }
+
+    int size = 0;
+    
+    
+
+    // Allocate the html
+    char* html = malloc(size);
+    if(!html){
+        perror("Allocation error in mark_double_down_parser");
+        free(fcontent);
+        return NULL;
+    }
+
+
+
+    free(fcontent);
+    return html;
+}
+
+typedef struct FileStats {
+    char* created;
+    char* modified;
+    char* filename;
+} FileStats;
+
+void file_format_date(time_t raw_time, char *date_str) {
+    
+    struct tm *time_info = localtime(&raw_time);
+    strftime(date_str, 11, "%d/%m/%Y", time_info); // Format: dd/mm/yyyy
+}
+
+int file_calculate_days_diff(time_t raw_time) {
+    int SECONDS_IN_A_DAY = 86400;
+
+    time_t current_time = time(NULL);
+    return (int)difftime(current_time, raw_time) / SECONDS_IN_A_DAY;
+}
+
+FileStats* file_get_file_stats(char* fpath){
+    // Allocate struct 
+    FileStats* file_stats = (FileStats*)malloc(sizeof(FileStats));
+    if (!file_stats) {
+        perror("Memory allocation for FileStats failed");
+        return NULL;
+    }
+
+    struct stat file_stat;
+    // Get file stats
+    if (stat(fpath, &file_stat) == -1) {
+        perror("Unable to get file stats");
+        return NULL;
+    }
+
+    // Allocate and format creation date
+    file_stats->created = (char*)malloc(11 * sizeof(char));
+    file_format_date(file_stat.st_ctime, file_stats->created);
+
+    // Allocate and format modification date
+    file_stats->modified = (char*)malloc(11 * sizeof(char));
+    file_format_date(file_stat.st_mtime, file_stats->modified);
+
+    // extract basename of path
+    char *filename = basename(fpath); 
+    file_stats->filename = strdup(filename);
+
+    return file_stats;
+}
+
+void file_free_file_stats(FileStats* file_stats) {
+    if (file_stats) {
+        free(file_stats->created);
+        free(file_stats->modified);
+        free(file_stats->filename);
+        free(file_stats);
+    }
+}
 
 // Function to look up a variable in the linked list
 char* template_lookup_variable(TemplateData* data, const char* key) {
@@ -578,13 +750,14 @@ void http_route_notes(Request* req, Response* res){
     printf("Postname: %s\n", postname);
     printf("Note path: %s\n", filename);
 
+    FileStats* fstats = file_get_file_stats(filename);
     char* content = file_read_to_buffer(filename);
 
     TemplateData* data = NULL;
     template_add_variable(&data, "content", content);
-    template_add_variable(&data, "filename", postname);
-
-    printf("Notes:%s\n", content);
+    template_add_variable(&data, "filename", fstats->filename);
+    template_add_variable(&data, "created", fstats->created);
+    template_add_variable(&data, "modified", fstats->modified);
 
     // build res
     char* rendered_html = template_render_template("./pages/note.html", data);
@@ -592,12 +765,15 @@ void http_route_notes(Request* req, Response* res){
     res->version = strdup("HTTP/1.1");
     res->status_code = strdup("200");
     res->status_message = strdup("OK");
+
     res->body = strdup(rendered_html);
-    res->headers = NULL;
+    res->body_length = strlen(res->body);
+    res->content_type = MIME_TEXT_HTML;
 
     template_free_list(data);
     free(content);
     free(rendered_html);
+    file_free_file_stats(fstats);
 }
 
 void http_route_404(Request* req, Response* res){
@@ -705,7 +881,10 @@ void http_route_public(Request* req, Response* res) {
 }
 Response* http_route_request(Response* response, Request* request) {
     char* path = request->path;
-
+    if((strcmp(path, "/public") == 0) || (strncmp(path, "/public/", 8) == 1) || strcmp(path, "/test") == 1){
+        // Increment counter if it's not 404 and public request  
+        file_increment_counter();
+    }
     if (response == NULL) {
         perror("Failed to allocate memory for response");
     }
@@ -722,6 +901,7 @@ Response* http_route_request(Response* response, Request* request) {
     else if ((strcmp(path, "/public") == 0) || (strncmp(path, "/public/", 8) == 0)) {
         http_route_public(request, response);
     }
+    
 
     // Check if it's starts first "/public" (do not change original path)
     // http_route_public
@@ -1072,48 +1252,7 @@ void free_request(Request* request) {
     free(request);
 }
 
-void file_increment_counter() {
-    int fd = open(COUNTER_PATH, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-    if (fd < 0) {
-        perror("Open error");
-        return;
-    }
 
-    // Lock the file to prevent concurrent writes
-    if (flock(fd, LOCK_EX) < 0) {
-        perror("Lock error");
-        close(fd);
-        return;
-    }
-
-    // Read the current counter value
-    char buffer[64];
-    ssize_t bytes_read = read(fd, buffer, sizeof(buffer) - 1);
-    int counter = 0;
-
-    if (bytes_read > 0) {
-        buffer[bytes_read] = '\0';
-        counter = atoi(buffer);
-    } else if (bytes_read < 0) {
-        perror("Read error");
-    }
-
-    // Increment the counter
-    counter++;
-
-    // Write the updated counter back to the file
-    lseek(fd, 0, SEEK_SET);
-    ftruncate(fd, 0);  // Clear the file before writing
-    snprintf(buffer, sizeof(buffer), "%d\n", counter);
-
-    if (write(fd, buffer, strlen(buffer)) < 0) {
-        perror("Write error");
-    }
-
-    // Unlock the file and close it
-    flock(fd, LOCK_UN);
-    close(fd);
-}
 
 void http_init(){
 
@@ -1168,8 +1307,7 @@ void http_init(){
 			continue;
 		}
 
-		// Increment counter in every request
-		file_increment_counter();
+
 
 		Request* request = http_parse_request(buffer); 
         if(!request){
@@ -1234,5 +1372,9 @@ char* http_read_buffer(int fd){
     return buffer;
 }
 int main(){
+    char* fcontent = file_read_to_buffer("./notes/test.md");
+    int size =mark_double_down_calculate_html_size(fcontent);
+    printf("Markdown size %d\n", size);
+    free(fcontent);
 	http_init();
 }
