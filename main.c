@@ -442,31 +442,203 @@ int mark_double_down_calculate_html_size(const char* fcontent) {
     return size;
 }
 
-char* mark_double_down_parser(char* fpath){
-    // Read the file 
+/*
+ * this code is written by ai 
+ * but that's not mean i'm suck at programming i just gave the algorithm to ai
+ * tell ur mom she has skill issues 
+ */
+
+ char* mark_double_down_parser(char* fpath) {
+    // Read the file content into a buffer
     char* fcontent = file_read_to_buffer(fpath);
-    if(!fcontent){
+    if (!fcontent) {
         perror("Reading file error in mark_double_down_parser");
         return NULL;
     }
 
-    int size = 0;
+    // Calculate the required size for the HTML output
+    int size = mark_double_down_calculate_html_size(fcontent);
     
-    
-
-    // Allocate the html
-    char* html = malloc(size);
-    if(!html){
-        perror("Allocation error in mark_double_down_parser");
-        free(fcontent);
+    // Reallocate fcontent to the estimated size
+    fcontent = realloc(fcontent, size);
+    if (!fcontent) {
+        perror("Reallocation error in mark_double_down_parser");
         return NULL;
     }
 
+    char* dest = fcontent;      // Pointer to write into the output buffer
+    const char* src = fcontent;  // Pointer to read from the input buffer
 
+    // Process the input character by character
+    while (*src) {
+        // Detect Markdown-style headers (e.g., "# Header")
+        if (*src == '#' && (*(src + 1) == ' ' || *(src + 1) == '#')) {
+            int level = 0;
+            while (*src == '#') { level++; src++; }
+            
+            if (*src == ' ') {
+                dest += sprintf(dest, "<h%d>", level);
+                src++; // Skip space
 
-    free(fcontent);
-    return html;
+                // Parse heading content with inline formatting
+                while (*src && *src != '\n') {
+                    // Handle inline formatting (bold, italic, both)
+                    if ((*src == '*' && *(src + 1) == '*') || (*src == '_' && *(src + 1) == '_')) {
+                        // Bold formatting (**bold** or __bold__)
+                        char delimiter = *src;
+                        dest += sprintf(dest, "<strong>");
+                        src += 2;
+                        while (*src && !(*src == delimiter && *(src + 1) == delimiter)) {
+                            *dest++ = *src++;
+                        }
+                        if (*src) {
+                            dest += sprintf(dest, "</strong>");
+                            src += 2;
+                        }
+                    } else if (*src == '*' || *src == '_') {
+                        // Italic formatting (*italic* or _italic_)
+                        char delimiter = *src;
+                        dest += sprintf(dest, "<em>");
+                        src++;
+                        while (*src && *src != delimiter) {
+                            *dest++ = *src++;
+                        }
+                        if (*src) {
+                            dest += sprintf(dest, "</em>");
+                            src++;
+                        }
+                    } else {
+                        *dest++ = *src++;
+                    }
+                }
+                dest += sprintf(dest, "</h%d>", level);
+            }
+        }
+        // Parse unordered lists (e.g., "- Item")
+        else if ((*src == '-' || *src == '*' || *src == '+') && *(src + 1) == ' ') {
+            dest += sprintf(dest, "<ul><li>");
+            src += 2;  // Skip the list marker and space
+
+            // Process list item content until the next newline
+            while (*src && *src != '\n') {
+                *dest++ = *src++;
+            }
+            dest += sprintf(dest, "</li></ul>");
+            src++;  // Skip the newline character
+        }
+        // Parse ordered lists (e.g., "1. Item")
+        else if (isdigit(*src) && *(src + 1) == '.' && *(src + 2) == ' ') {
+            dest += sprintf(dest, "<ol><li>");
+            src += 3;  // Skip the number, period, and space
+
+            // Process list item content until the next newline
+            while (*src && *src != '\n') {
+                *dest++ = *src++;
+            }
+            dest += sprintf(dest, "</li></ol>");
+            src++;  // Skip the newline character
+        }
+        // Detect blockquotes ("> Quote")
+        else if (*src == '>' && *(src + 1) == ' ') {
+            dest += sprintf(dest, "<blockquote>");
+            src += 2;
+            while (*src && *src != '\n') {
+                *dest++ = *src++;
+            }
+            dest += sprintf(dest, "</blockquote>");
+        }
+        // Detect inline code (`code`)
+        else if (*src == '`') {
+            dest += sprintf(dest, "<code>");
+            src++;
+            while (*src && *src != '`') {
+                *dest++ = *src++;
+            }
+            dest += sprintf(dest, "</code>");
+            src++;
+        }
+        // Bold + Italic (*** or ___)
+        else if ((src[0] == '*' && src[1] == '*' && src[2] == '*') || 
+                 (src[0] == '_' && src[1] == '_' && src[2] == '_')) {
+            char delimiter = *src;
+            dest += sprintf(dest, "<strong><em>");
+            src += 3;
+            while (*src && !(*src == delimiter && src[1] == delimiter && src[2] == delimiter)) {
+                *dest++ = *src++;
+            }
+            if (*src) {
+                dest += sprintf(dest, "</em></strong>");
+                src += 3;
+            }
+        }
+        // Bold (** or __)
+        else if ((src[0] == '*' && src[1] == '*') || (src[0] == '_' && src[1] == '_')) {
+            char delimiter = *src;
+            dest += sprintf(dest, "<strong>");
+            src += 2;
+            while (*src && !(*src == delimiter && src[1] == delimiter)) {
+                *dest++ = *src++;
+            }
+            if (*src) {
+                dest += sprintf(dest, "</strong>");
+                src += 2;
+            }
+        }
+        // Italics (* or _)
+        else if (*src == '*' || *src == '_') {
+            char delimiter = *src;
+            dest += sprintf(dest, "<em>");
+            src++;
+            while (*src && *src != delimiter) {
+                *dest++ = *src++;
+            }
+            if (*src) {
+                dest += sprintf(dest, "</em>");
+                src++;
+            }
+        }
+        // Links: [text](url)
+        else if (*src == '[') {
+            const char* link_text_start = ++src; // Skip '['
+            while (*src && *src != ']') src++; // Find closing ']'
+            
+            if (*src == ']' && *(src + 1) == '(') {
+                size_t text_length = src - link_text_start; // Length of link text
+                src += 2; // Skip "]("
+                const char* url_start = src;
+                
+                while (*src && *src != ')') src++; // Find closing ')'
+                
+                if (*src == ')') {
+                    size_t url_length = src - url_start; // Length of URL
+                    src++; // Skip past ')'
+                    
+                    // Allocate temporary buffers for text and URL
+                    char* link_text = strndup(link_text_start, text_length);
+                    char* link_url = strndup(url_start, url_length);
+                    
+                    // Append formatted link to the output
+                    dest += sprintf(dest, "<a href=\"%s\">%s</a>", link_url, link_text);
+                    
+                    // Free temporary buffers
+                    free(link_text);
+                    free(link_url);
+                }
+            } else {
+                *dest++ = '['; // Invalid format, treat as normal text
+                src = link_text_start;
+            }
+        }
+        // Default case: copy character as-is
+        else {
+            *dest++ = *src++;
+        }
+    }
+
+    *dest = '\0'; // Null-terminate the generated HTML string
+    return fcontent; // Return the modified fcontent as the final HTML
 }
+
 
 typedef struct FileStats {
     char* created;
@@ -1373,8 +1545,12 @@ char* http_read_buffer(int fd){
 }
 int main(){
     char* fcontent = file_read_to_buffer("./notes/test.md");
-    int size =mark_double_down_calculate_html_size(fcontent);
+    int size = mark_double_down_calculate_html_size(fcontent);
     printf("Markdown size %d\n", size);
+    char* md = mark_double_down_parser("./notes/test.md");
+
+    printf("Markdown: %s\n", md);
+    free(md);
     free(fcontent);
 	http_init();
 }
