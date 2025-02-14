@@ -458,15 +458,14 @@ int mark_double_down_calculate_html_size(const char* fcontent) {
 
     // Calculate the required size for the HTML output
     int size = mark_double_down_calculate_html_size(fcontent);
-    
-    // Reallocate fcontent to the estimated size
-    fcontent = realloc(fcontent, size);
-    if (!fcontent) {
-        perror("Reallocation error in mark_double_down_parser");
+    char* html = malloc(size);
+    if (!html) {
+        perror("Allocation error in mark_double_down_parser");
+        free(fcontent);
         return NULL;
     }
 
-    char* dest = fcontent;      // Pointer to write into the output buffer
+    char* dest = html;      // Pointer to write into the output buffer
     const char* src = fcontent;  // Pointer to read from the input buffer
 
     // Process the input character by character
@@ -514,30 +513,7 @@ int mark_double_down_calculate_html_size(const char* fcontent) {
                 dest += sprintf(dest, "</h%d>", level);
             }
         }
-        // Parse unordered lists (e.g., "- Item")
-        else if ((*src == '-' || *src == '*' || *src == '+') && *(src + 1) == ' ') {
-            dest += sprintf(dest, "<ul><li>");
-            src += 2;  // Skip the list marker and space
 
-            // Process list item content until the next newline
-            while (*src && *src != '\n') {
-                *dest++ = *src++;
-            }
-            dest += sprintf(dest, "</li></ul>");
-            src++;  // Skip the newline character
-        }
-        // Parse ordered lists (e.g., "1. Item")
-        else if (isdigit(*src) && *(src + 1) == '.' && *(src + 2) == ' ') {
-            dest += sprintf(dest, "<ol><li>");
-            src += 3;  // Skip the number, period, and space
-
-            // Process list item content until the next newline
-            while (*src && *src != '\n') {
-                *dest++ = *src++;
-            }
-            dest += sprintf(dest, "</li></ol>");
-            src++;  // Skip the newline character
-        }
         // Detect blockquotes ("> Quote")
         else if (*src == '>' && *(src + 1) == ' ') {
             dest += sprintf(dest, "<blockquote>");
@@ -547,7 +523,7 @@ int mark_double_down_calculate_html_size(const char* fcontent) {
             }
             dest += sprintf(dest, "</blockquote>");
         }
-        // Detect inline code (`code`)
+        // Detect inline code (code)
         else if (*src == '`') {
             dest += sprintf(dest, "<code>");
             src++;
@@ -636,9 +612,9 @@ int mark_double_down_calculate_html_size(const char* fcontent) {
     }
 
     *dest = '\0'; // Null-terminate the generated HTML string
-    return fcontent; // Return the modified fcontent as the final HTML
+    free(fcontent); // Free the input buffer
+    return html; // Return the converted HTML
 }
-
 
 typedef struct FileStats {
     char* created;
@@ -923,10 +899,11 @@ void http_route_notes(Request* req, Response* res){
     printf("Note path: %s\n", filename);
 
     FileStats* fstats = file_get_file_stats(filename);
-    char* content = file_read_to_buffer(filename);
+    char* fcontent = file_read_to_buffer(filename);
+    char* markdown = mark_double_down_parser(filename); 
 
     TemplateData* data = NULL;
-    template_add_variable(&data, "content", content);
+    template_add_variable(&data, "content", markdown);
     template_add_variable(&data, "filename", fstats->filename);
     template_add_variable(&data, "created", fstats->created);
     template_add_variable(&data, "modified", fstats->modified);
@@ -943,7 +920,7 @@ void http_route_notes(Request* req, Response* res){
     res->content_type = MIME_TEXT_HTML;
 
     template_free_list(data);
-    free(content);
+    free(fcontent);
     free(rendered_html);
     file_free_file_stats(fstats);
 }
