@@ -854,77 +854,6 @@ void http_route_500(Request* req, Response* res){
     res->headers = NULL;
 }
 
-void http_route_source(Request* req, Response* res){
-
-        res->version = strdup("HTTP/1.1");
-        res->status_code = strdup("200");
-        res->status_message = strdup("OK");
-
-        res->content_type = MIME_TEXT_PLAIN;
-
-        char* page= file_read_to_buffer("./main.c");
-
-        // TemplateData* data = NULL;
-        // template_add_variable(&data, "code", src);
-        // char* page = template_render_template("./pages/source.html", data);
-        res->body = strdup(page);
-        if (res->body == NULL) {
-            perror("Failed to allocate memory for response body");
-        }
-        res->headers = NULL; 
-        free(page);
-        // free(src);
-}
-
-
-void http_route_notes(Request* req, Response* res){
-    const char* prefix = "./notes/";
-    const char* suffix = ".md";
-    
-    size_t path_len = strlen(req->path);
-    size_t prefix_len = strlen(prefix);
-    size_t suffix_len = strlen(suffix);
-    
-    size_t total_size = prefix_len + path_len + suffix_len + 1; // +1 for null terminator
-    
-    char* filename = (char*)malloc(total_size);
-    if (!filename) {
-        http_route_500(req, res);
-        return;
-    }
-    char* postname = req->path;
-    snprintf(filename, total_size, "./notes%s.md", postname);
-
-    printf("Postname: %s\n", postname);
-    printf("Note path: %s\n", filename);
-
-    FileStats* fstats = file_get_file_stats(filename);
-    char* fcontent = file_read_to_buffer(filename);
-    char* markdown = mark_double_down_parser(filename); 
-
-    TemplateData* data = NULL;
-    template_add_variable(&data, "content", markdown);
-    template_add_variable(&data, "filename", fstats->filename);
-    template_add_variable(&data, "created", fstats->created);
-    template_add_variable(&data, "modified", fstats->modified);
-
-    // build res
-    char* rendered_html = template_render_template("./pages/note.html", data);
-
-    res->version = strdup("HTTP/1.1");
-    res->status_code = strdup("200");
-    res->status_message = strdup("OK");
-
-    res->body = strdup(rendered_html);
-    res->body_length = strlen(res->body);
-    res->content_type = MIME_TEXT_HTML;
-
-    template_free_list(data);
-    free(fcontent);
-    free(rendered_html);
-    file_free_file_stats(fstats);
-}
-
 void http_route_404(Request* req, Response* res){
         res->version = strdup("HTTP/1.1");
         res->status_code = strdup("404");
@@ -942,6 +871,100 @@ void http_route_404(Request* req, Response* res){
         free(page);
 }
 
+
+
+void http_route_source(Request* req, Response* res){
+
+        res->version = strdup("HTTP/1.1");
+        res->status_code = strdup("200");
+        res->status_message = strdup("OK");
+        res->content_type = MIME_TEXT_HTML;
+
+        char* src = file_read_to_buffer("./main.c");
+        FileStats* stats = file_get_file_stats("./main.c");
+
+        TemplateData* data = NULL;
+        template_add_variable(&data, "code", src);
+        template_add_variable(&data, "created", stats->created);
+        template_add_variable(&data, "modified", stats->modified);
+        char* page = template_render_template("./pages/source.html", data);
+        res->body = page; 
+        if (res->body == NULL) {
+            perror("Failed to allocate memory for response body");
+            free(src);
+            file_free_file_stats(stats);
+            http_route_500(req,res);
+        }
+        free(src);
+        file_free_file_stats(stats);
+}
+
+
+void http_route_notes(Request* req, Response* res) {
+    const char* prefix = "./notes";
+    const char* suffix = ".md";
+
+    size_t path_len = strlen(req->path);
+    size_t prefix_len = strlen(prefix);
+    size_t suffix_len = strlen(suffix);
+    
+    size_t total_size = prefix_len + path_len + suffix_len + 1; // +1 for null terminator
+    
+    char* filename = (char*)malloc(total_size);
+    if (!filename) {
+        http_route_500(req, res);
+        return;
+    }
+
+    snprintf(filename, total_size, "./notes%s.md", req->path);
+
+    FileStats* fstats = file_get_file_stats(filename);
+    if (!fstats) {
+        free(filename);
+        http_route_404(req, res);
+        return;
+    }
+
+    char* fcontent = file_read_to_buffer(filename);
+    if (!fcontent) {
+        file_free_file_stats(fstats);
+        free(filename);
+        http_route_404(req, res);
+        return;
+    }
+
+    char* markdown = mark_double_down_parser(filename);
+    if (!markdown) {
+        free(fcontent);
+        file_free_file_stats(fstats);
+        free(filename);
+        http_route_404(req, res);
+        return;
+    }
+
+    TemplateData* data = NULL;
+    template_add_variable(&data, "content", markdown);
+    template_add_variable(&data, "filename", fstats->filename);
+    template_add_variable(&data, "created", fstats->created);
+    template_add_variable(&data, "modified", fstats->modified);
+
+
+    char* rendered_html = template_render_template("./pages/note.html", data);
+    
+    res->version = strdup("HTTP/1.1");
+    res->status_code = strdup("200");
+    res->status_message = strdup("OK");
+    res->body = strdup(rendered_html);
+    res->body_length = strlen(res->body);
+    res->content_type = MIME_TEXT_HTML;
+
+    template_free_list(data);
+    free(fcontent);
+    free(rendered_html);
+    file_free_file_stats(fstats);
+    free(filename);
+}
+
 void http_route_home(Request* req, Response* res){
     res->version = strdup("HTTP/1.1");
     res->status_code = strdup("200");
@@ -953,7 +976,7 @@ void http_route_home(Request* req, Response* res){
     char* notes_str = posts_to_string(notes); 
 
     TemplateData* data = NULL;
-    template_add_variable(&data, "notes", "<h1>SSDA</h1>");  // Use notes_str inside template
+    template_add_variable(&data, "notes", notes_str);
 
     char* body = template_render_template("./pages/index.html", data);
     if (!body) {
@@ -1043,9 +1066,10 @@ Response* http_route_request(Response* response, Request* request) {
     else if(strcmp(path, "/source") == 0){
         http_route_source(request, response);
     }
-    else if(strcmp(path, "/test") == 0){
+
+    else if ((strcmp(path, "/post") == 0) || (strncmp(path, "/post/", 6) == 0)) {
         http_route_notes(request, response);
-    }
+    } 
 
     else if ((strcmp(path, "/public") == 0) || (strncmp(path, "/public/", 8) == 0)) {
         http_route_public(request, response);
