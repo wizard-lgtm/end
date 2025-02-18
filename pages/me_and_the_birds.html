@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400&display=swap");
+
+      body {
+        background: #0d1d3d;
+        color: #d7d7d7;
+        font-family: "IBM Plex Mono", monospace;
+        text-align: center;
+        line-height: 1.6;
+        padding: 20px;
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        position: relative;
+      }
+
+      .play-button {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        background: #f0f0ed;
+        color: #0d1d3d;
+        border: none;
+        padding: 10px 15px;
+        font-size: 14px;
+        font-family: "IBM Plex Mono", monospace;
+        cursor: pointer;
+        border-radius: 5px;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+        transition: background 0.3s, transform 0.2s;
+      }
+
+      .play-button:hover {
+        background: #b0a999;
+        transform: scale(1.05);
+      }
+
+      p {
+        font-size: 18px;
+        max-width: 600px;
+        letter-spacing: 0.5px;
+        text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+      }
+
+      img {
+        width: 60%;
+        max-width: 500px;
+        border-radius: 10px;
+        box-shadow: 0 6px 14px rgba(0, 0, 0, 0.4);
+        filter: sepia(40%) contrast(100%) brightness(95%);
+        transition: transform 0.3s ease-in-out, box-shadow 0.3s ease-in-out;
+      }
+
+      p:nth-child(odd) {
+        color: #b0a999;
+      }
+
+      p:nth-child(even) {
+        color: #f0f0ed;
+      }
+
+      p:hover {
+        color: #fff;
+        transition: color 0.3s ease-in-out;
+      }
+
+      @media (max-width: 600px) {
+        body {
+          padding: 10px;
+        }
+        img {
+          width: 80%;
+        }
+        p {
+          font-size: 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <img src="../public/familier_fields_m.gif" alt="" />
+    <p>sometimes i feel i'm wasting my time</p>
+    <p>is the any change to revert it back?</p>
+    <p>or maybe stop this endless pain to stop it back?</p>
+    <p>can i just sleep as well?</p>
+    <p>i'm sick of getting my time well</p>
+    <p>can i just watch the birds again?</p>
+    <p>can i stop the blood from pressing me so hard?</p>
+    <p>is there any way to relax then?</p>
+    <p>just me, and the birds</p>
+    <audio controls>
+      <source src="../public/duster_its_coming_back.mp3" type="audio/mpeg" />
+      Your browser does not support the audio element.
+    </audio>
+
+    <p><center>18 Feb 2025. 15:06</center></p>
+  </body>
+</html>
