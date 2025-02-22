@@ -268,48 +268,6 @@ void print_posts(Post* head) {
     }
 }
 
-char* posts_to_string(Post* head) {
-    if (!head) return strdup("");  // Return empty string if list is empty
-
-    size_t total_size = 1; // Start with 1 for null terminator
-    Post* temp = head;
-
-    // Calculate required size
-    while (temp) {
-        total_size += snprintf(NULL, 0, "File: %s | Created: %d | Modified: %d | Private: %d\n",
-                               temp->filename, temp->created, temp->modified, temp->private);
-        temp = temp->next;
-    }
-
-    // Allocate memory for the full string
-    char* result = malloc(total_size);
-    if (!result) {
-        perror("malloc failed");
-        return NULL;
-    }
-
-    // Build the full string safely
-    char* current_pos = result;
-    size_t remaining_size = total_size;
-
-    temp = head;
-    while (temp) {
-        int written = snprintf(current_pos, remaining_size,
-                 "File: %s | Created: %d | Modified: %d | Private: %d\n",
-                 temp->filename, temp->created, temp->modified, temp->private);
-        if (written < 0 || (size_t)written >= remaining_size) {
-            free(result);
-            perror("snprintf buffer overflow");
-            return NULL;
-        }
-        current_pos += written;  // Move pointer forward
-        remaining_size -= written;  // Reduce available space
-        temp = temp->next;
-    }
-
-    return result;
-}
-
 unsigned char* file_read_binary_to_buffer(const char* fpath, size_t* out_size) {
     FILE* file = fopen(fpath, "rb");
     if (!file) {
@@ -620,10 +578,35 @@ typedef struct FileStats {
     char* created;
     char* modified;
     char* filename;
+    char* path; // absolute path
 } FileStats;
+typedef struct FileList {
+    struct FileStats* stats;
+    struct FileList* next;
+} FileList;
+
+void print_file_list(FileList* head) {
+    FileList* current = head;
+    
+    if (current == NULL) {
+        printf("The file list is empty.\n");
+        return;
+    }
+    
+    printf("File List:\n");
+    printf("--------------------------------------------------\n");
+    
+    while (current != NULL) {
+        printf("Filename: %s\n", current->stats->filename);
+        printf("Created: %s\n", current->stats->created);
+        printf("Modified: %s\n", current->stats->modified);
+        printf("--------------------------------------------------\n");
+        
+        current = current->next;
+    }
+}
 
 void file_format_date(time_t raw_time, char *date_str) {
-    
     struct tm *time_info = localtime(&raw_time);
     strftime(date_str, 11, "%d/%m/%Y", time_info); // Format: dd/mm/yyyy
 }
@@ -636,6 +619,7 @@ int file_calculate_days_diff(time_t raw_time) {
 }
 
 FileStats* file_get_file_stats(char* fpath){
+    printf("fpath: %s\n", fpath);
     // Allocate struct 
     FileStats* file_stats = (FileStats*)malloc(sizeof(FileStats));
     if (!file_stats) {
@@ -662,15 +646,90 @@ FileStats* file_get_file_stats(char* fpath){
     char *filename = basename(fpath); 
     file_stats->filename = strdup(filename);
 
+     // Add absolute path
+     char *abs_path = realpath(fpath, NULL);
+     if (abs_path == NULL) {
+         perror("Failed to get absolute path");
+         file_stats->path = strdup(fpath); // Fall back to original path
+     } else {
+         file_stats->path = abs_path; // Transfer ownership (no need to strdup)
+     }
+
     return file_stats;
 }
+
+FileList* file_list_dir(char* fpath){
+    FileList* head = NULL;
+    FileList* tail = NULL;
+
+    
+    // Open dir
+    DIR* dir = opendir(fpath);
+    if(!dir){
+        printf("Error: can't open folder %s\n", fpath);
+        return NULL;
+    }
+    struct dirent* entry;
+
+    while((entry = readdir(dir)) != NULL){
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        
+        int full_path_len = strlen(fpath) + strlen(entry->d_name) + 1;
+        char full_path[full_path_len]; // max path long
+        snprintf(full_path, full_path_len, "%s/%s", fpath, entry->d_name);
+
+        FileStats* stats = file_get_file_stats(entry->d_name);
+        if(!stats){
+            continue;
+        }
+
+        stats->path = full_path;
+
+        printf("Absolute path: %s\n", full_path);
+        
+        FileList* new_node = (FileList*)malloc(sizeof(FileList));
+        if(!new_node){
+            perror("Allocation failed on file_list_dir");
+            return NULL;
+        }
+        new_node->stats = stats;
+        new_node->next = NULL;
+
+        if(!head){
+            head = new_node;
+        }else{
+            tail->next = new_node;
+        }
+    
+        tail = new_node;
+    }
+
+    closedir(dir);
+
+    return head;
+
+}
+
+
 
 void file_free_file_stats(FileStats* file_stats) {
     if (file_stats) {
         free(file_stats->created);
         free(file_stats->modified);
         free(file_stats->filename);
+        free(file_stats->path);
         free(file_stats);
+    }
+}
+
+void file_free_file_list(FileList* file_list){
+    while(file_list != NULL){
+        FileList* temp = file_list;
+        file_list = file_list->next;
+        file_free_file_stats(temp->stats);
+        free(temp);
     }
 }
 
@@ -965,25 +1024,57 @@ void http_route_notes(Request* req, Response* res) {
     free(filename);
 }
 
+char* http_render_file_list(FileList* list){
+    int size = 1; // \0
+    char* buffer = malloc(size);
+    buffer[0] = '\0';
+
+    char* fmt = "<a href=\"/post/%s\">filename: %s</a></>";
+
+    while(list != NULL){
+        char* fname = list->stats->path;
+        int needed = snprintf(NULL, 0, fmt, fname, fname) + 1;
+        char* new_buffer = realloc(buffer, size + needed);
+        if (!new_buffer) {
+            free(buffer); 
+            return NULL;
+        }
+        buffer = new_buffer;
+
+        sprintf(buffer + size - 1, fmt, fname, fname); // at that point i don't even know what am i writing
+
+        size += needed - 1;
+        list = list->next;
+    }
+
+    return buffer;
+    
+}
+
 void http_route_home(Request* req, Response* res){
     res->version = strdup("HTTP/1.1");
     res->status_code = strdup("200");
     res->status_message = strdup("OK");
     res->content_type = MIME_TEXT_HTML;
 
-    char* notes_path = "./notes";
-    Post* notes = read_dir_entries(notes_path);
-    char* notes_str = posts_to_string(notes); 
+    char* posts_path = "./posts";
+    FileList* list = file_list_dir(posts_path);
+    if(!list){
+        http_route_500(req, res);
+    }
+
+    print_file_list(list);
+    
 
     TemplateData* data = NULL;
-    template_add_variable(&data, "notes", notes_str);
+    char* posts_html = http_render_file_list(list);
+    template_add_variable(&data, "posts", posts_html);
 
     char* body = template_render_template("./pages/index.html", data);
     if (!body) {
         perror("template_render_template failed");
         template_free_list(data);
-        free_posts(notes);
-        free(notes_str);
+       
         http_route_500(req, res);
         return;
     }
@@ -996,18 +1087,19 @@ void http_route_home(Request* req, Response* res){
     if (!res->body) {
         perror("Failed to allocate memory for response body");
         free(body);
-        free_posts(notes);
-        free(notes_str);
+       
         http_route_500(req, res);
         return;
     }
 
     res->headers = NULL;
 
+    free(posts_html);
     free(body);
-    free_posts(notes);
-    free(notes_str);
+  
 }
+
+
 
 void http_route_public(Request* req, Response* res) {
     char* fpath = malloc(strlen(req->path) + 1);
@@ -1545,13 +1637,5 @@ char* http_read_buffer(int fd){
     return buffer;
 }
 int main(){
-    char* fcontent = file_read_to_buffer("./notes/test.md");
-    int size = mark_double_down_calculate_html_size(fcontent);
-    printf("Markdown size %d\n", size);
-    char* md = mark_double_down_parser("./notes/test.md");
-
-    printf("Markdown: %s\n", md);
-    free(md);
-    free(fcontent);
 	http_init();
 }
