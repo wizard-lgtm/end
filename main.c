@@ -1,6 +1,5 @@
-#ifdef __linux__
-    #define _POSIX_C_SOURCE 200809L  // Enable POSIX features only for Linux
-#endif
+
+#include <time.h> 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,9 +14,10 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <dirent.h>
-#include <time.h> 
+
 #include <sys/fcntl.h>
 #include <libgen.h>
+#include <limits.h>
 
 #define PORT 8001
 #define BUFFER_CHUNK_SIZE 1024
@@ -48,6 +48,37 @@ enum HttpMimeTypes {
     MIME_APPLICATION_OCTET_STREAM,
     MIME_UNKNOWN
 };
+
+typedef struct Request {
+    enum HttpMethods method;
+    char* path;
+    char* version;
+    Header* headers;  // Changed to linked list of headers
+    char* body;
+} Request;
+typedef struct {
+	char* version;
+	char* status_code;
+	char* status_message;
+    enum HttpMimeTypes content_type;
+	Header* headers;
+	char* body;
+    size_t body_length;
+} Response;
+
+typedef struct Post{
+    char* filename;
+    int created;
+    int modified;
+    int private;
+    struct Post* next;
+} Post;
+
+typedef struct TemplateData {
+    char* key;
+    char* value;
+    struct TemplateData* next;
+} TemplateData;
 
 
 char* file_parse_extension(char* fpath){
@@ -149,36 +180,7 @@ enum HttpMimeTypes mime_from_string(char* fpath) {
     return MIME_APPLICATION_OCTET_STREAM;  // Default MIME type for unknown extensions
 }
 
-typedef struct Request {
-    enum HttpMethods method;
-    char* path;
-    char* version;
-    Header* headers;  // Changed to linked list of headers
-    char* body;
-} Request;
-typedef struct {
-	char* version;
-	char* status_code;
-	char* status_message;
-    enum HttpMimeTypes content_type;
-	Header* headers;
-	char* body;
-    size_t body_length;
-} Response;
 
-typedef struct Post{
-    char* filename;
-    int created;
-    int modified;
-    int private;
-    struct Post* next;
-} Post;
-
-typedef struct TemplateData {
-    char* key;
-    char* value;
-    struct TemplateData* next;
-} TemplateData;
 
 
 char* http_read_buffer(int fd);
@@ -271,7 +273,7 @@ void print_posts(Post* head) {
 unsigned char* file_read_binary_to_buffer(const char* fpath, size_t* out_size) {
     FILE* file = fopen(fpath, "rb");
     if (!file) {
-        perror("Failed to open file");
+        printf("Failed to open file %s\n", fpath);
         return NULL;
     }
 
@@ -471,7 +473,6 @@ int mark_double_down_calculate_html_size(const char* fcontent) {
                 dest += sprintf(dest, "</h%d>", level);
             }
         }
-
         // Detect blockquotes ("> Quote")
         else if (*src == '>' && *(src + 1) == ' ') {
             dest += sprintf(dest, "<blockquote>");
@@ -563,6 +564,43 @@ int mark_double_down_calculate_html_size(const char* fcontent) {
                 src = link_text_start;
             }
         }
+        // Markdown image support: ![alt text](image URL)
+        else if (*src == '!' && *(src + 1) == '[') {
+            const char* alt_text_start = src + 2; // Skip "!["
+        
+            // Find the closing ']'
+            while (*src && *src != ']') src++; 
+            
+            if (*src == ']') {
+                size_t alt_text_length = src - alt_text_start; // Length of alt text
+                src++; // Skip past ']'
+                
+                // Check if there's an opening '(' after the ']'
+                if (*src == '(') {
+                    const char* url_start = ++src; // Skip past '('
+        
+                    // Find the closing ')'
+                    while (*src && *src != ')') src++; 
+        
+                    if (*src == ')') {
+                        size_t url_length = src - url_start; // Length of URL
+                        src++; // Skip past ')'
+                        
+                        // Allocate temporary buffers for alt text and URL
+                        char* alt_text = strndup(alt_text_start, alt_text_length);
+                        char* image_url = strndup(url_start, url_length);
+                        
+                        // Append formatted image tag to the output
+                        dest += sprintf(dest, "<img src=\"%s\" alt=\"%s\">", image_url, alt_text);
+                        
+                        // Free temporary buffers
+                        free(alt_text);
+                        free(image_url);
+                    }
+                }
+            }
+        }
+        
         // Default case: copy character as-is
         else {
             *dest++ = *src++;
@@ -573,6 +611,7 @@ int mark_double_down_calculate_html_size(const char* fcontent) {
     free(fcontent); // Free the input buffer
     return html; // Return the converted HTML
 }
+
 
 typedef struct FileStats {
     char* created;
@@ -676,11 +715,11 @@ FileList* file_list_dir(char* fpath){
             continue;
         }
         
-        int full_path_len = strlen(fpath) + strlen(entry->d_name) + 1;
+        int full_path_len = strlen(fpath) + strlen(entry->d_name) + 2;
         char full_path[full_path_len]; // max path long
         snprintf(full_path, full_path_len, "%s/%s", fpath, entry->d_name);
 
-        FileStats* stats = file_get_file_stats(entry->d_name);
+        FileStats* stats = file_get_file_stats(full_path);
         if(!stats){
             continue;
         }
@@ -960,26 +999,34 @@ void http_route_source(Request* req, Response* res){
 
 
 void http_route_notes(Request* req, Response* res) {
-    const char* prefix = "./notes";
-    const char* suffix = ".md";
+    char* fpath = malloc(strlen(req->path) + 1);
+    if (fpath == NULL) {
+        perror("Failed to allocate memory for fpath");
+        return;
+    }
+    strcpy(fpath, req->path);
+    printf("Requested post: %s\n", fpath);
 
-    size_t path_len = strlen(req->path);
-    size_t prefix_len = strlen(prefix);
-    size_t suffix_len = strlen(suffix);
-    
-    size_t total_size = prefix_len + path_len + suffix_len + 1; // +1 for null terminator
-    
+    const char* ext = strrchr(req->path, '.');
+    int is_html = 0;
+    if (ext && strcmp(ext, ".html") == 0) {
+        is_html = 1;
+    }
+
+    size_t total_size = 2 + strlen(req->path); // "." + path + NULL terminator
     char* filename = (char*)malloc(total_size);
     if (!filename) {
+        free(fpath);
         http_route_500(req, res);
         return;
     }
-
-    snprintf(filename, total_size, "./notes%s.md", req->path);
+    snprintf(filename, total_size, ".%s", req->path);
+    printf("Filename: %s\n", filename);
 
     FileStats* fstats = file_get_file_stats(filename);
     if (!fstats) {
         free(filename);
+        free(fpath);
         http_route_404(req, res);
         return;
     }
@@ -988,51 +1035,60 @@ void http_route_notes(Request* req, Response* res) {
     if (!fcontent) {
         file_free_file_stats(fstats);
         free(filename);
+        free(fpath);
         http_route_404(req, res);
         return;
     }
 
-    char* markdown = mark_double_down_parser(filename);
-    if (!markdown) {
-        free(fcontent);
-        file_free_file_stats(fstats);
-        free(filename);
-        http_route_404(req, res);
-        return;
+    if (!is_html) {
+        char* markdown = mark_double_down_parser(filename);
+        if (!markdown) {
+            free(fcontent);
+            file_free_file_stats(fstats);
+            free(filename);
+            free(fpath);
+            http_route_404(req, res);
+            return;
+        }
+
+        TemplateData* data = NULL;
+        template_add_variable(&data, "content", markdown);
+        template_add_variable(&data, "filename", fstats->filename);
+        template_add_variable(&data, "created", fstats->created);
+        template_add_variable(&data, "modified", fstats->modified);
+
+        char* rendered_html = template_render_template("./pages/note.html", data);
+
+        res->body = strdup(rendered_html);
+        template_free_list(data);
+        free(rendered_html);
+        free(markdown);
+    } else {
+        res->body = strdup(fcontent);
     }
 
-    TemplateData* data = NULL;
-    template_add_variable(&data, "content", markdown);
-    template_add_variable(&data, "filename", fstats->filename);
-    template_add_variable(&data, "created", fstats->created);
-    template_add_variable(&data, "modified", fstats->modified);
-
-
-    char* rendered_html = template_render_template("./pages/note.html", data);
-    
     res->version = strdup("HTTP/1.1");
     res->status_code = strdup("200");
     res->status_message = strdup("OK");
-    res->body = strdup(rendered_html);
     res->body_length = strlen(res->body);
     res->content_type = MIME_TEXT_HTML;
 
-    template_free_list(data);
     free(fcontent);
-    free(rendered_html);
     file_free_file_stats(fstats);
     free(filename);
+    free(fpath);
 }
+
 
 char* http_render_file_list(FileList* list){
     int size = 1; // \0
     char* buffer = malloc(size);
     buffer[0] = '\0';
 
-    char* fmt = "<a href=\"/post/%s\">filename: %s</a></>";
+    char* fmt = "<a href=\"/post/%s\">filename: %s</a></br>";
 
     while(list != NULL){
-        char* fname = list->stats->path;
+        char* fname = list->stats->filename;
         int needed = snprintf(NULL, 0, fmt, fname, fname) + 1;
         char* new_buffer = realloc(buffer, size + needed);
         if (!new_buffer) {
@@ -1057,7 +1113,7 @@ void http_route_home(Request* req, Response* res){
     res->status_message = strdup("OK");
     res->content_type = MIME_TEXT_HTML;
 
-    char* posts_path = "./posts";
+    char* posts_path = "./post";
     FileList* list = file_list_dir(posts_path);
     if(!list){
         http_route_500(req, res);
@@ -1105,6 +1161,7 @@ void http_route_public(Request* req, Response* res) {
     char* fpath = malloc(strlen(req->path) + 1);
     if (fpath == NULL) {
         perror("Failed to allocate memory for fpath");
+
         return;
     }
     strcpy(fpath, req->path);
