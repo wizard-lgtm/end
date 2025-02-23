@@ -1,0 +1,4 @@
+# Duster
+Duster is an indie, slowcore 3-piece band from California (Lorusso, 2019). Formed over 2 decades ago, their first album was released in 1998 and is still a considerable influence to this day. Some of their most popular songs have come from that album. Previous to this band, the members were in another group called Valium Aggelein, in which they released two albums. Duster’s music is slow, minimal, lo-fi, simple and melancholy, using droning basslines, quiet and monotone vocals, synthesisers and simple guitar parts to make them so unique and anti-mainstream. The band started during the spike of grunge artists, which were almost the exact opposite of slowcore and dream-pop. It was almost like a rebellion against the volume and angst of the likes of Nirvana and Soundgarden.
+
+![Tux, the Linux mascot](/public/plane.gif)
