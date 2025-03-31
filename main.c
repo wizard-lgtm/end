@@ -14,6 +14,7 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include "cmark.h"
 
 #include <sys/fcntl.h>
 #include <libgen.h>
@@ -400,6 +401,22 @@ int mark_double_down_calculate_html_size(const char* fcontent) {
     }
     
     return size;
+}
+
+char* cmark_render_markdown_file(char* fpath){
+    char* fcontent = file_read_to_buffer(fpath);
+	if(!fcontent){
+		printf("Error while opening file on mark_double_down_render_file: %s, fpath");
+		return NULL;
+	}
+    int len = strlen(fcontent);
+    char* rendered_html = cmark_markdown_to_html(fcontent, len, CMARK_OPT_DEFAULT);
+    if(!rendered_html){
+		printf("Error happened while rendering markdown");
+		free(fcontent);
+        return NULL;
+    }
+    return rendered_html;
 }
 
 /*
@@ -1202,7 +1219,7 @@ void http_route_notes(Request* req, Response* res) {
     }
 
     if (!is_html) {
-        char* markdown = mark_double_down_render_file(filename);
+        char* markdown = cmark_render_markdown_file(filename); 
         if (!markdown) {
             free(fcontent);
             file_free_file_stats(fstats);
