@@ -408,208 +408,369 @@ int mark_double_down_calculate_html_size(const char* fcontent) {
  * tell ur mom she has skill issues 
  */
 
- char* mark_double_down_parser(char* fpath) {
-    // Read the file content into a buffer
-    char* fcontent = file_read_to_buffer(fpath);
-    if (!fcontent) {
-        perror("Reading file error in mark_double_down_parser");
+ char* mark_double_down_renderer(char* markdown){
+    int size = mark_double_down_calculate_html_size(markdown); 
+    char* html = malloc(sizeof(char) * size + 1);
+    if(!html){
+        printf("Error: memory allocation error in mark_double_down_render\n");
         return NULL;
     }
-
-    // Calculate the required size for the HTML output
-    int size = mark_double_down_calculate_html_size(fcontent);
-    char* html = malloc(size);
-    if (!html) {
-        perror("Allocation error in mark_double_down_parser");
-        free(fcontent);
-        return NULL;
-    }
-
-    char* dest = html;      // Pointer to write into the output buffer
-    const char* src = fcontent;  // Pointer to read from the input buffer
-
-    // Process the input character by character
-    while (*src) {
-        // Detect Markdown-style headers (e.g., "# Header")
-        if (*src == '#' && (*(src + 1) == ' ' || *(src + 1) == '#')) {
+    html[0] = '\0'; // NULL termination
+    int html_index = 0;
+    int i = 0;
+    int in_paragraph = 0;
+    int in_tag = 0;
+    int in_list = 0;
+    
+    while(markdown[i] != '\0'){
+        char current = markdown[i];
+        
+        // Handle headings
+        if(current == '#') {
+            // Close any open paragraph first
+            if(in_paragraph) {
+                html_index += sprintf(html + html_index, "</p>\n");
+                in_paragraph = 0;
+            }
+            
+            // Close any open list
+            if(in_list) {
+                html_index += sprintf(html + html_index, "</ul>\n");
+                in_list = 0;
+            }
+            
             int level = 0;
-            while (*src == '#') { level++; src++; }
             
-            if (*src == ' ') {
-                dest += sprintf(dest, "<h%d>", level);
-                src++; // Skip space
-
-                // Parse heading content with inline formatting
-                while (*src && *src != '\n') {
-                    // Handle inline formatting (bold, italic, both)
-                    if ((*src == '*' && *(src + 1) == '*') || (*src == '_' && *(src + 1) == '_')) {
-                        // Bold formatting (**bold** or __bold__)
-                        char delimiter = *src;
-                        dest += sprintf(dest, "<strong>");
-                        src += 2;
-                        while (*src && !(*src == delimiter && *(src + 1) == delimiter)) {
-                            *dest++ = *src++;
-                        }
-                        if (*src) {
-                            dest += sprintf(dest, "</strong>");
-                            src += 2;
-                        }
-                    } else if (*src == '*' || *src == '_') {
-                        // Italic formatting (*italic* or _italic_)
-                        char delimiter = *src;
-                        dest += sprintf(dest, "<em>");
-                        src++;
-                        while (*src && *src != delimiter) {
-                            *dest++ = *src++;
-                        }
-                        if (*src) {
-                            dest += sprintf(dest, "</em>");
-                            src++;
-                        }
-                    } else {
-                        *dest++ = *src++;
-                    }
+            // Count the number of consecutive # symbols
+            while(markdown[i] == '#') {
+                level++;
+                i++;
+            }
+            
+            // Skip any spaces after the # symbols
+            while(markdown[i] == ' ') {
+                i++;
+            }
+            
+            // Opening heading tag
+            html_index += sprintf(html + html_index, "<h%d>", level);
+            in_tag = 1;
+            
+            // Copy the heading content
+            while(markdown[i] != '\0' && markdown[i] != '\n') {
+                html[html_index++] = markdown[i++];
+            }
+            
+            // Closing heading tag
+            html_index += sprintf(html + html_index, "</h%d>", level);
+            in_tag = 0;
+            
+            // Add a newline
+            html[html_index++] = '\n';
+            
+            // Skip the newline character
+            if(markdown[i] == '\n') {
+                i++;
+            }
+        }
+        // Handle unordered lists (starting with * or - or + followed by a space)
+        else if((current == '*' || current == '-' || current == '+') && 
+                markdown[i+1] == ' ' && 
+                (i == 0 || markdown[i-1] == '\n')) {
+            
+            // Close any open paragraph first
+            if(in_paragraph) {
+                html_index += sprintf(html + html_index, "</p>\n");
+                in_paragraph = 0;
+            }
+            
+            // Start a new list if we're not already in one
+            if(!in_list) {
+                html_index += sprintf(html + html_index, "<ul>\n");
+                in_list = 1;
+            }
+            
+            // Start list item
+            html_index += sprintf(html + html_index, "  <li>");
+            
+            // Skip the marker and the space
+            i += 2;
+            
+            // Copy the list item content
+            while(markdown[i] != '\0' && markdown[i] != '\n') {
+                html[html_index++] = markdown[i++];
+            }
+            
+            // Close list item
+            html_index += sprintf(html + html_index, "</li>\n");
+            
+            // Skip the newline
+            if(markdown[i] == '\n') {
+                i++;
+            }
+            
+            // Check if the next line is also a list item
+            // If not, close the list
+            if(markdown[i] == '\0' || 
+               ((markdown[i] != '*' && markdown[i] != '-' && markdown[i] != '+') || 
+                markdown[i+1] != ' ')) {
+                html_index += sprintf(html + html_index, "</ul>\n");
+                in_list = 0;
+            }
+        }
+        // Handle paragraph breaks
+        else if(current == '\n' && markdown[i+1] == '\n') {
+            // Close previous paragraph if we're in one
+            if(in_paragraph) {
+                html_index += sprintf(html + html_index, "</p>\n");
+                in_paragraph = 0;
+            } else if(in_list) {
+                // Close list if we have a double newline
+                html_index += sprintf(html + html_index, "</ul>\n");
+                in_list = 0;
+            } else {
+                // Just add a newline if we're not in a paragraph
+                html[html_index++] = '\n';
+            }
+            
+            // Skip both newlines
+            i += 2;
+        }
+        // Handle emphasis (italic)
+        else if(current == '*' && markdown[i+1] != '*' && 
+                (i == 0 || markdown[i-1] != '\\') && 
+                // Make sure this isn't a list item
+                !(i == 0 || markdown[i-1] == '\n' || 
+                  (markdown[i+1] == ' ' && (i == 0 || markdown[i-1] == '\n')))) {
+            
+            // Start paragraph if needed and we're not in a tag or list
+            if(!in_paragraph && !in_tag && !in_list) {
+                html_index += sprintf(html + html_index, "<p>");
+                in_paragraph = 1;
+            }
+            
+            // Toggle italic tag
+            if(html_index > 0 && html[html_index-1] != '>' && html[html_index-1] != ' ') {
+                html_index += sprintf(html + html_index, "</em>");
+            } else {
+                html_index += sprintf(html + html_index, "<em>");
+            }
+            i++;
+        }
+        // Handle strong emphasis (bold)
+        else if(current == '*' && markdown[i+1] == '*' && (i == 0 || markdown[i-1] != '\\')) {
+            // Start paragraph if needed and we're not in a tag or list
+            if(!in_paragraph && !in_tag && !in_list) {
+                html_index += sprintf(html + html_index, "<p>");
+                in_paragraph = 1;
+            }
+            
+            // Toggle bold tag
+            if(html_index > 0 && html[html_index-1] != '>' && html[html_index-1] != ' ') {
+                html_index += sprintf(html + html_index, "</strong>");
+            } else {
+                html_index += sprintf(html + html_index, "<strong>");
+            }
+            i += 2; // Skip both asterisks
+        }
+        // Handle images
+        else if(current == '!' && markdown[i+1] == '[') {
+            
+            // This is an image
+            i += 2; // Skip ![ to get to the alt text
+            int alt_text_start = i;
+            
+            // Find the closing bracket
+            while(markdown[i] != '\0' && markdown[i] != ']') {
+                i++;
+            }
+            
+            if(markdown[i] == ']' && markdown[i+1] == '(') {
+                // Save the alt text
+                int alt_text_length = i - alt_text_start;
+                char alt_text[alt_text_length + 1];
+                strncpy(alt_text, markdown + alt_text_start, alt_text_length);
+                alt_text[alt_text_length] = '\0';
+                
+                // Move past "]("
+                i += 2;
+                
+                // Find the URL
+                int url_start = i;
+                while(markdown[i] != '\0' && markdown[i] != ')') {
+                    i++;
                 }
-                dest += sprintf(dest, "</h%d>", level);
-            }
-        }
-        // Detect blockquotes ("> Quote")
-        else if (*src == '>' && *(src + 1) == ' ') {
-            dest += sprintf(dest, "<blockquote>");
-            src += 2;
-            while (*src && *src != '\n') {
-                *dest++ = *src++;
-            }
-            dest += sprintf(dest, "</blockquote>");
-        }
-        // Detect inline code (code)
-        else if (*src == '`') {
-            dest += sprintf(dest, "<code>");
-            src++;
-            while (*src && *src != '`') {
-                *dest++ = *src++;
-            }
-            dest += sprintf(dest, "</code>");
-            src++;
-        }
-        // Bold + Italic (*** or ___)
-        else if ((src[0] == '*' && src[1] == '*' && src[2] == '*') || 
-                 (src[0] == '_' && src[1] == '_' && src[2] == '_')) {
-            char delimiter = *src;
-            dest += sprintf(dest, "<strong><em>");
-            src += 3;
-            while (*src && !(*src == delimiter && src[1] == delimiter && src[2] == delimiter)) {
-                *dest++ = *src++;
-            }
-            if (*src) {
-                dest += sprintf(dest, "</em></strong>");
-                src += 3;
-            }
-        }
-        // Bold (** or __)
-        else if ((src[0] == '*' && src[1] == '*') || (src[0] == '_' && src[1] == '_')) {
-            char delimiter = *src;
-            dest += sprintf(dest, "<strong>");
-            src += 2;
-            while (*src && !(*src == delimiter && src[1] == delimiter)) {
-                *dest++ = *src++;
-            }
-            if (*src) {
-                dest += sprintf(dest, "</strong>");
-                src += 2;
-            }
-        }
-        // Italics (* or _)
-        else if (*src == '*' || *src == '_') {
-            char delimiter = *src;
-            dest += sprintf(dest, "<em>");
-            src++;
-            while (*src && *src != delimiter) {
-                *dest++ = *src++;
-            }
-            if (*src) {
-                dest += sprintf(dest, "</em>");
-                src++;
-            }
-        }
-        // Links: [text](url)
-        else if (*src == '[') {
-            const char* link_text_start = ++src; // Skip '['
-            while (*src && *src != ']') src++; // Find closing ']'
-            
-            if (*src == ']' && *(src + 1) == '(') {
-                size_t text_length = src - link_text_start; // Length of link text
-                src += 2; // Skip "]("
-                const char* url_start = src;
                 
-                while (*src && *src != ')') src++; // Find closing ')'
-                
-                if (*src == ')') {
-                    size_t url_length = src - url_start; // Length of URL
-                    src++; // Skip past ')'
+                if(markdown[i] == ')') {
+                    // Save the URL
+                    int url_length = i - url_start;
+                    char url[url_length + 1];
+                    strncpy(url, markdown + url_start, url_length);
+                    url[url_length] = '\0';
                     
-                    // Allocate temporary buffers for text and URL
-                    char* link_text = strndup(link_text_start, text_length);
-                    char* link_url = strndup(url_start, url_length);
+                    // Add the HTML image
+                    html_index += sprintf(html + html_index, "<img src=\"%s\" alt=\"%s\">", url, alt_text);
                     
-                    // Append formatted link to the output
-                    dest += sprintf(dest, "<a href=\"%s\">%s</a>", link_url, link_text);
-                    
-                    // Free temporary buffers
-                    free(link_text);
-                    free(link_url);
+                    i++; // Move past the closing parenthesis
                 }
             } else {
-                *dest++ = '['; // Invalid format, treat as normal text
-                src = link_text_start;
+                // Not a valid image format, treat as normal text
+                html[html_index++] = '!';
+                html[html_index++] = '[';
+                i = alt_text_start; // Reset to start of alt text
             }
         }
-        // Markdown image support: ![alt text](image URL)
-        else if (*src == '!' && *(src + 1) == '[') {
-            const char* alt_text_start = src + 2; // Skip "!["
-        
-            // Find the closing ']'
-            while (*src && *src != ']') src++; 
+        // Handle links [text](url)
+        else if(current == '[') {
+            int link_text_start = i + 1;
             
-            if (*src == ']') {
-                size_t alt_text_length = src - alt_text_start; // Length of alt text
-                src++; // Skip past ']'
+            // Find the closing bracket
+            while(markdown[i] != '\0' && markdown[i] != ']') {
+                i++;
+            }
+            
+            if(markdown[i] == ']' && markdown[i+1] == '(') {
+                // Save the link text
+                int link_text_length = i - link_text_start;
+                char link_text[link_text_length + 1];
+                strncpy(link_text, markdown + link_text_start, link_text_length);
+                link_text[link_text_length] = '\0';
                 
-                // Check if there's an opening '(' after the ']'
-                if (*src == '(') {
-                    const char* url_start = ++src; // Skip past '('
-        
-                    // Find the closing ')'
-                    while (*src && *src != ')') src++; 
-        
-                    if (*src == ')') {
-                        size_t url_length = src - url_start; // Length of URL
-                        src++; // Skip past ')'
-                        
-                        // Allocate temporary buffers for alt text and URL
-                        char* alt_text = strndup(alt_text_start, alt_text_length);
-                        char* image_url = strndup(url_start, url_length);
-                        
-                        // Append formatted image tag to the output
-                        dest += sprintf(dest, "<img src=\"%s\" alt=\"%s\">", image_url, alt_text);
-                        
-                        // Free temporary buffers
-                        free(alt_text);
-                        free(image_url);
-                    }
+                // Move past "]("
+                i += 2;
+                
+                // Find the URL
+                int url_start = i;
+                while(markdown[i] != '\0' && markdown[i] != ')') {
+                    i++;
+                }
+                
+                if(markdown[i] == ')') {
+                    // Save the URL
+                    int url_length = i - url_start;
+                    char url[url_length + 1];
+                    strncpy(url, markdown + url_start, url_length);
+                    url[url_length] = '\0';
+                    
+                    // Add the HTML link
+                    html_index += sprintf(html + html_index, "<a href=\"%s\">%s</a>", url, link_text);
+                    
+                    i++; // Move past the closing parenthesis
+                }
+            } else {
+                // Not a valid link format, treat as normal text
+                html[html_index++] = current;
+                i = link_text_start; // Reset to just after the opening bracket
+            }
+        }
+        // Handle code blocks
+        else if(current == '`') {
+            // Check for code block (```)
+            if(markdown[i+1] == '`' && markdown[i+2] == '`') {
+                // Close paragraph if we're in one since code blocks are block elements
+                if(in_paragraph) {
+                    html_index += sprintf(html + html_index, "</p>\n");
+                    in_paragraph = 0;
+                }
+                
+                // Close list if we're in one
+                if(in_list) {
+                    html_index += sprintf(html + html_index, "</ul>\n");
+                    in_list = 0;
+                }
+                
+                html_index += sprintf(html + html_index, "<pre><code>");
+                in_tag = 1;
+                i += 3; // Skip ```
+                
+                // Copy until closing ```
+                while(markdown[i] != '\0' && 
+                      !(markdown[i] == '`' && markdown[i+1] == '`' && markdown[i+2] == '`')) {
+                    html[html_index++] = markdown[i++];
+                }
+                
+                if(markdown[i] != '\0') {
+                    html_index += sprintf(html + html_index, "</code></pre>\n");
+                    in_tag = 0;
+                    i += 3; // Skip closing ```
+                }
+            } 
+            // Handle inline code
+            else {
+                // Start paragraph if needed and we're not in a tag or list
+                if(!in_paragraph && !in_tag && !in_list) {
+                    html_index += sprintf(html + html_index, "<p>");
+                    in_paragraph = 1;
+                }
+                
+                html_index += sprintf(html + html_index, "<code>");
+                i++; // Skip opening `
+                
+                // Copy until closing `
+                while(markdown[i] != '\0' && markdown[i] != '`') {
+                    html[html_index++] = markdown[i++];
+                }
+                
+                if(markdown[i] == '`') {
+                    html_index += sprintf(html + html_index, "</code>");
+                    i++; // Skip closing `
                 }
             }
         }
-        
-        // Default case: copy character as-is
+        // Handle single newlines (convert to space within paragraphs)
+        else if(current == '\n' && markdown[i+1] != '\n') {
+            if(in_paragraph) {
+                // In Markdown, a single newline within a paragraph is treated as a space
+                html[html_index++] = ' ';
+            } else {
+                html[html_index++] = '\n';
+            }
+            i++;
+        }
+        // Handle plain text (default case)
         else {
-            *dest++ = *src++;
+            // Start a paragraph if we're not in one and not in another tag or list
+            if(!in_paragraph && !in_tag && !in_list && current != '\n') {
+                html_index += sprintf(html + html_index, "<p>");
+                in_paragraph = 1;
+            }
+            
+            // Copy character to HTML
+            html[html_index++] = current;
+            i++;
         }
     }
+    
+    // Ensure we close the last paragraph if we're still in one
+    if(in_paragraph) {
+        html_index += sprintf(html + html_index, "</p>");
+    }
+    
+    // Ensure we close the last list if we're still in one
+    if(in_list) {
+        html_index += sprintf(html + html_index, "</ul>");
+    }
+    
+    // Ensure NULL termination
+    html[html_index] = '\0';
+    
+    return html;
+}
 
-    *dest = '\0'; // Null-terminate the generated HTML string
-    free(fcontent); // Free the input buffer
-    return html; // Return the converted HTML
+char* mark_double_down_render_file(char* fpath){
+	char* fcontent = file_read_to_buffer(fpath);
+	if(!fcontent){
+		printf("Error while opening file on mark_double_down_render_file: %s, fpath");
+		return NULL;
+	}
+	char* html = mark_double_down_renderer(fcontent);
+	if(!html){
+		printf("Error happened while rendering markdown");
+		free(fcontent);
+		return NULL;
+	}
+
+	return html;
 }
 
 
@@ -1041,7 +1202,7 @@ void http_route_notes(Request* req, Response* res) {
     }
 
     if (!is_html) {
-        char* markdown = mark_double_down_parser(filename);
+        char* markdown = mark_double_down_render_file(filename);
         if (!markdown) {
             free(fcontent);
             file_free_file_stats(fstats);
