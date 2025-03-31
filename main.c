@@ -843,38 +843,45 @@ FileStats* file_get_file_stats(char* fpath){
         perror("Memory allocation for FileStats failed");
         return NULL;
     }
-
     struct stat file_stat;
     // Get file stats
     if (stat(fpath, &file_stat) == -1) {
         perror("Unable to get file stats");
+        free(file_stats);
         return NULL;
     }
-
-    // Allocate and format creation date
+    
+    // Allocate and format dates
     file_stats->created = (char*)malloc(11 * sizeof(char));
-    file_format_date(file_stat.st_ctime, file_stats->created);
-
-    // Allocate and format modification date
     file_stats->modified = (char*)malloc(11 * sizeof(char));
+    
+    // Try to get actual creation time if available
+    #ifdef __APPLE__
+        // On macOS, we can use birthtime
+        file_format_date(file_stat.st_birthtime, file_stats->created);
+    #else
+        // On other systems, fallback to ctime but mark it
+        file_format_date(file_stat.st_ctime, file_stats->created);
+    #endif
+    
+    // Modification time
     file_format_date(file_stat.st_mtime, file_stats->modified);
-
-    // extract basename of path
+    
+    // Extract basename of path
     char *filename = basename(fpath); 
     file_stats->filename = strdup(filename);
-
-     // Add absolute path
-     char *abs_path = realpath(fpath, NULL);
-     if (abs_path == NULL) {
-         perror("Failed to get absolute path");
-         file_stats->path = strdup(fpath); // Fall back to original path
-     } else {
-         file_stats->path = abs_path; // Transfer ownership (no need to strdup)
-     }
-
+    
+    // Add absolute path
+    char *abs_path = realpath(fpath, NULL);
+    if (abs_path == NULL) {
+        perror("Failed to get absolute path");
+        file_stats->path = strdup(fpath); // Fall back to original path
+    } else {
+        file_stats->path = abs_path; // Transfer ownership
+    }
+    
     return file_stats;
 }
-
 FileList* file_list_dir(char* fpath){
     FileList* head = NULL;
     FileList* tail = NULL;
