@@ -1636,77 +1636,176 @@ enum HttpMethods parse_method(char* method) {
     return UNKNOWN;
 }
 Request* http_parse_request(char* buffer) {
-
     // Allocate request
     Request* req = (Request*)malloc(sizeof(Request));
     if (!req) return NULL;
     
+    // Initialize request fields to NULL for safe cleanup on error
+    req->path = NULL;
+    req->version = NULL;
+    req->headers = NULL;
+    req->body = NULL;
+    
     // Find the position of "\r\n\r\n"
     char* separator = strstr(buffer, "\r\n\r\n");
 
-    if (separator != NULL) {
-        // Null-terminate the header part
-        *separator = '\0';  
-        char* head = buffer; // The header starts at the beginning
-        char* body = separator + 4; // The body starts after the \r\n\r\n delimiter
-
-        // Now, split header into status line and headers
-        // Find the first "\r\n" to separate status line from headers
-        char* header_end = strstr(head, "\r\n");
-        if (header_end != NULL) {
-            *header_end = '\0';  // Null-terminate the status line
-            char* status_line = head;  // The status line is at the beginning
-            char* headers_str = header_end + 2;  // The headers start after the first \r\n
-
-            // Parse the status line
-            char* method_end = strtok(status_line, " ");
-            req->method = parse_method(method_end); // Parse method
-            req->path = strdup(strtok(NULL, " "));  // Get path
-            req->version = strdup(strtok(NULL, " ")); // Get version
-
-            // Initialize headers
-            req->headers = NULL;
-            Header* current_header = NULL;
-
-            // Parse header lines
-            char* header_line = strtok(headers_str, "\r\n");
-
-            while (header_line) {
-                // Split each header into key and value
-                char* colon_pos = strchr(header_line, ':');
-                if (colon_pos) {
-                    *colon_pos = '\0'; // Null-terminate the key
-                    char* key = header_line;
-                    char* value = colon_pos + 2; // Skip over ": "
-
-                    // Create a new header
-                    Header* new_header = (Header*)malloc(sizeof(Header));
-                    new_header->key = strdup(key);
-                    new_header->value = strdup(value);
-                    new_header->next = NULL;
-
-                    // Link it to the list
-                    if (!req->headers) {
-                        req->headers = new_header;
-                    } else {
-                        current_header->next = new_header;
-                    }
-                    current_header = new_header;
-                }
-                header_line = strtok(NULL, "\r\n");
-            }
-
-            // Copy body
-            req->body = strdup(body);
-
-        } else {
-            printf("Error: Could not find status line delimiter.\n");
-        }
-    } else {
+    if (separator == NULL) {
         printf("Error: Could not find header-body separator.\n");
+        free(req);
         return NULL;
     }
     
+    // Copy buffer to a temporary working copy to avoid modifying original
+    char* buffer_copy = strdup(buffer);
+    if (!buffer_copy) {
+        printf("Error: Memory allocation failed.\n");
+        free(req);
+        return NULL;
+    }
+    
+    // Find separator in the copy
+    char* temp_separator = strstr(buffer_copy, "\r\n\r\n");
+    if (temp_separator == NULL) {  // This should never happen, but just to be safe
+        printf("Error: Could not find header-body separator in copy.\n");
+        free(buffer_copy);
+        free(req);
+        return NULL;
+    }
+    
+    // Null-terminate the header part
+    *temp_separator = '\0';
+    char* head = buffer_copy;
+    char* body = buffer + (temp_separator - buffer_copy) + 4; // Point to body in original buffer
+    
+    // Find the first "\r\n" to separate status line from headers
+    char* header_end = strstr(head, "\r\n");
+    if (header_end == NULL) {
+        printf("Error: Could not find status line delimiter.\n");
+        free(buffer_copy);
+        free(req);
+        return NULL;
+    }
+    
+    *header_end = '\0';  // Null-terminate the status line
+    char* status_line = head;
+    char* headers_str = header_end + 2;
+    
+    // Parse the status line
+    char* method_str = strtok(status_line, " ");
+    if (method_str == NULL) {
+        printf("Error: Malformed request line - missing method.\n");
+        free(buffer_copy);
+        free(req);
+        return NULL;
+    }
+    req->method = parse_method(method_str);
+    
+    // Get path
+    char* path = strtok(NULL, " ");
+    if (path == NULL) {
+        printf("Error: Malformed request line - missing path.\n");
+        free(buffer_copy);
+        free(req);
+        return NULL;
+    }
+    req->path = strdup(path);
+    if (!req->path) {
+        printf("Error: Memory allocation failed for path.\n");
+        free(buffer_copy);
+        free(req);
+        return NULL;
+    }
+    
+    // Get version
+    char* version = strtok(NULL, " ");
+    if (version == NULL) {
+        printf("Error: Malformed request line - missing HTTP version.\n");
+        free(req->path);
+        free(buffer_copy);
+        free(req);
+        return NULL;
+    }
+    req->version = strdup(version);
+    if (!req->version) {
+        printf("Error: Memory allocation failed for version.\n");
+        free(req->path);
+        free(buffer_copy);
+        free(req);
+        return NULL;
+    }
+    
+    // Initialize headers
+    req->headers = NULL;
+    Header* current_header = NULL;
+    
+    // Parse header lines
+    char* header_line = strtok(headers_str, "\r\n");
+    
+    while (header_line) {
+        // Split each header into key and value
+        char* colon_pos = strchr(header_line, ':');
+        if (colon_pos) {
+            *colon_pos = '\0'; // Null-terminate the key
+            char* key = header_line;
+            char* value = colon_pos + 1; // Start after the colon
+            
+            // Skip any leading whitespace in value
+            while (*value == ' ' && *value != '\0') {
+                value++;
+            }
+            
+            // Create a new header
+            Header* new_header = (Header*)malloc(sizeof(Header));
+            if (!new_header) {
+                printf("Error: Memory allocation failed for header.\n");
+                free_request(req);  // This will free everything we've allocated so far
+                free(buffer_copy);
+                return NULL;
+            }
+            
+            new_header->key = strdup(key);
+            if (!new_header->key) {
+                printf("Error: Memory allocation failed for header key.\n");
+                free(new_header);
+                free_request(req);
+                free(buffer_copy);
+                return NULL;
+            }
+            
+            new_header->value = strdup(value);
+            if (!new_header->value) {
+                printf("Error: Memory allocation failed for header value.\n");
+                free(new_header->key);
+                free(new_header);
+                free_request(req);
+                free(buffer_copy);
+                return NULL;
+            }
+            
+            new_header->next = NULL;
+            
+            // Link it to the list
+            if (!req->headers) {
+                req->headers = new_header;
+            } else {
+                current_header->next = new_header;
+            }
+            current_header = new_header;
+        }
+        header_line = strtok(NULL, "\r\n");
+    }
+    
+    // Copy body
+    req->body = strdup(body);
+    if (!req->body) {
+        printf("Error: Memory allocation failed for body.\n");
+        free_request(req);
+        free(buffer_copy);
+        return NULL;
+    }
+    
+    // Free the temporary buffer
+    free(buffer_copy);
     return req;
 }
 
